@@ -310,6 +310,8 @@ DeviceTypeID_SCS        = DeviceTypeID_bike_speed_cadence
 DeviceTypeID_VTX        = 61            # Tacx i-Vortex
 DeviceTypeID_GNS        = 83            # Tacx Genius
 DeviceTypeID_BHU        = 82            # Tacx Bushido head unit
+DeviceTypeID_BSH        = 81            # Tacx Bushido brake
+
 # 0x3d  according TotalReverse
 DeviceTypeID_VHU        = 0x3e          # Thanks again to TotalReverse
 # https://github.com/WouterJD/FortiusANT/issues/46#issuecomment-616838329
@@ -2517,3 +2519,721 @@ def msgUnpage_SCS (info):
 
     #      EventTime, CadenceRevolutionCount, EventTime, SpeedRevolutionCount
     return tuple[1],  tuple[2],               tuple[3],  tuple[4]
+
+#=======================================================================================================================
+# rjon65 added Bushido messages here: need to consolidate with already existing ones
+#=======================================================================================================================
+
+# ------------------------------------------------------------------------------
+# P a g e 0 0 Bushido   - Occurs when using TTS4, usually after restart when paused
+# ------------------------------------------------------------------------------
+def msgUnpage00_TacxBushidoData (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fIndex              = sc.unsigned_char
+
+    fField1             = sc.unsigned_char
+    nField1             = 3
+    fField2             = sc.unsigned_char
+    nField2             = 4
+    fField3             = sc.unsigned_char
+    nField3             = 5
+    fField4             = sc.unsigned_char
+    nField4             = 6
+    fField5             = sc.unsigned_char
+    nField5             = 7
+    fField6             = sc.unsigned_char
+    nField6             = 8
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fIndex + fField1  + fField2 + fField3 + fField4 + fField5 + fField6
+    tuple = struct.unpack (format, info)
+
+    Page = tuple[1]
+    Index = tuple[2]
+    Rev0 = tuple[nField1]
+    Rev1 = tuple[nField2]
+    Rev2 = tuple[nField3]
+    Rev3 = tuple[nField4]
+    Rev4 = tuple[nField5]
+    Rev5 = tuple[nField6]
+
+    if debug.on(debug.Function):
+        logfile.Write("Received Bushido page %2.2d (subpage %2.2d): 0x%2.2X-%2.2X-%2.2X-%2.2X-%2.2X-%2.2X" % (Page, Index, Rev0, Rev1, Rev2, Rev3, Rev4, Rev5))
+
+    return
+
+# ------------------------------------------------------------------------------
+# P a g e 0 1 Bushido   P o w e r
+# 0x01 AA AA BB BB CC CC 00
+#
+# AAAA = Some other power measure (Left, Right, averaged, corrected, ...)
+# BBBB = Power
+# CCCC = Some other power measure (Left, Right, averaged, corrected, ...)
+# ------------------------------------------------------------------------------
+# Refer: https://github.com/fluxoid-org/CyclismoProject/wiki/Tacx-Bushido-Brake-protocol
+# ------------------------------------------------------------------------------
+
+def msgUnpage01_TacxBushidoData (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+
+    fLRForce1           = sc.unsigned_short # maybe L/R power distribution
+    nLRForce1           = 2
+    fPower              = sc.unsigned_short  # power
+    nPower              = 3
+    fLRForce2           = sc.unsigned_short  # maybe L/R power distribution
+    nLRForce2           = 4
+    fSBZ1               = sc.unsigned_char  # 00
+    nSBZ1               = 5
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fLRForce1 + fPower + fLRForce2 + fSBZ1
+    tuple = struct.unpack (format, info)
+
+    LRForce1 = tuple[nLRForce1]
+    Power = tuple[nPower]
+    LRForce2 = tuple[nLRForce2]
+    SBZ1 = tuple[nSBZ1]
+
+    if debug.on(debug.Function):
+        logfile.Write("Received Bushido page %2.2d. Power %3.3d. L/R Force %3.3d - %3.3d" % (tuple[1], Power, LRForce1, LRForce2))
+
+    if (SBZ1 != 0):
+        logfile.Write("Received Bushido page %2.2d field not zero: 0x%2.2X" % (tuple[1], SBZ1))
+
+    return Power, LRForce1, LRForce2
+
+# ------------------------------------------------------------------------------
+
+def msgPage01_TacxBushidoData (Channel, Power):
+    DataPageNumber      = 1
+
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+
+    fLRForce1           = sc.unsigned_short  # maybe L/R power distribution
+    fPower              = sc.unsigned_short  # power
+    fLRForce2           = sc.unsigned_short  # maybe L/R power distribution
+    fSBZ1               = sc.unsigned_char   # 00
+
+    LRForce1 = int(Power) - 50
+    LRForce2 = int(Power) + 50
+
+    format = sc.big_endian +    fChannel + fDataPageNumber + fPower +  fLRForce1 + fLRForce2 + fSBZ1
+    info   = struct.pack(format, Channel ,  DataPageNumber , LRForce1 ,  int(Power), LRForce2, 0)
+
+    if debug.on(debug.Function):
+        logfile.Write("Writing Bushido page %2.2d. Power %3.3d. L/R Force %3.3d - %3.3d" % (DataPageNumber, Power, LRForce1 , LRForce2))
+
+    return info
+
+# ------------------------------------------------------------------------------
+# P a g e 01 Bushido  T a r g e t P o w e r
+# 0x01 PP PP 00 00 00 00 00
+#
+# rjon: as observed using ANT+ bridge received from HU/TTS4
+# ------------------------------------------------------------------------------
+
+def msgUnpage01_TacxBushidoHeadDataPower (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+
+    fPowerS             = sc.unsigned_char  # resistance sign
+    nPowerS             = 2
+    fPowerL             = sc.unsigned_char  # resistance LSBs
+    nPowerL             = 3
+    fSBZ1               = sc.unsigned_short  # 00 00
+    nSBZ1               = 4
+    fSBZ2               = sc.unsigned_short  # 00 00
+    nSBZ2               = 5
+    fSBZ3               = sc.unsigned_char   # 00
+    nSBZ3               = 6
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fPowerS + fPowerL + fSBZ1 + fSBZ2 + fSBZ3
+    tuple = struct.unpack (format, info)
+
+    Sign = tuple[nPowerS]
+    Resistance = tuple[nPowerL]
+    if int(Sign) < 128:
+        Resistance *= Sign
+    else:
+        Resistance *= (Sign - 256)
+    SBZ1 = tuple[nSBZ1]
+    SBZ2 = tuple[nSBZ2]
+    SBZ3 = tuple[nSBZ3]
+
+    if debug.on(debug.Function):
+        logfile.Write("Received Bushido HU page %2.2d. Target Resistance %4.4d." % (tuple[1], Resistance))
+
+    if (SBZ1 or SBZ2 or SBZ3):
+        logfile.Write("Received Bushido HU page %2.2d fields not zero: 0x%4.4x - 0x%4.4x - 0x%2.2x" % (tuple[1], SBZ1, SBZ2, SBZ3))
+
+    return Resistance
+
+# ------------------------------------------------------------------------------
+
+def msgPage01_TacxBushidoHeadDataPower (Channel, targetPower):
+    DataPageNumber      = 1
+
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+
+    fPower              = sc.unsigned_short  # power PP PP
+    fSBZ1               = sc.unsigned_short  # 00 00
+    fSBZ2               = sc.unsigned_short  # 00 00
+    fSBZ3               = sc.unsigned_char   # 00
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fPower + fSBZ1 + fSBZ2 + fSBZ3
+    info   = struct.pack(format, Channel ,  DataPageNumber, int(targetPower), 0, 0,0)
+
+    if debug.on(debug.Function):
+        logfile.Write("Writing Bushido HU page %2.2d. Target Power %3.3d." % (DataPageNumber, targetPower))
+
+    return info
+
+# ------------------------------------------------------------------------------
+# P a g e 01 Bushido   Resistance
+# 0x01 AA BB 00 00 00 00 00
+#
+# rjon: 2020-12-16 using bridge detected not all zero fields are zero,
+# but rather something like:
+# 0x01 AA BB 00 XX 00 YY 00 - no idea what XX and YY are about
+# AA = Course brake resistance level, range: 0x00 > 0x0c (0-12), 0xFF > OxFE.
+# BB = Fine brake resistance level (0x00 > 0xFF)
+# For example, when the gradient is negative, the course resistance will be set
+# around 0xFF to 0xFE for minimal resistance (level -1 or -2).
+# When the gradient is extremely steep, or the speed is very high the course
+# resistance will be at level 12.
+#
+# It is likely that for each slope level there will be a power vs brake
+# resistance curve, and that the virtual flywheel effect is implemented by
+# dropping the resistance set here when coasting.
+#
+# The riders weight is probably used only in the speed calculated from the
+# riders power output.
+# ------------------------------------------------------------------------------
+# Refer:    https://github.com/fluxoid-org/CyclismoProject/wiki/Tacx-Bushido-Brake-protocol
+# ------------------------------------------------------------------------------
+def msgUnpage01_TacxBushidoHeadDataResistance (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+
+    fCoarse             = sc.unsigned_char
+    nCoarse             = 2
+    fFine               = sc.unsigned_char
+    nFine               = 3
+    fSBZ1               = sc.unsigned_short  # 00 00
+    nSBZ1               = 4
+    fSBZ2               = sc.unsigned_short  # 00 00
+    nSBZ2               = 5
+    fSBZ3               = sc.unsigned_char  # 00
+    nSBZ3               = 6
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fCoarse + fFine + fSBZ1 + fSBZ2 + fSBZ3
+    tuple = struct.unpack (format, info)
+
+    Coarse = tuple[nCoarse]
+    Fine = tuple[nFine]
+    SBZ1 = tuple[nSBZ1]
+    SBZ2 = tuple[nSBZ2]
+    SBZ3 = tuple[nSBZ3]
+
+    if debug.on(debug.Function):
+        logfile.Write("Received Bushido resistance page %2.2d. Resistance coarse %3.3d and fine %3.3d" % (tuple[1], Coarse, Fine))
+
+    if (SBZ1 or SBZ2 or SBZ3):
+        logfile.Write("Received Bushido resistance page %2.2d fields not zero: 0x%4.4X - 0x%4.4X - 0x%2.2X" % (tuple[1], SBZ1, SBZ2, SBZ3))
+
+    return
+
+# ------------------------------------------------------------------------------
+# P a g e 02 Bushido   C a d e n c e - W h e e l s p e e d - B a l a n c e
+# 0x02 GG GG HH II 00 00 00
+#
+# GGGG = Actual wheel speed, probably calculated from cylinder circumference in kmph*10 *
+# HH = Cadence*
+# II = Pedalling force balance* (Range 0-100)
+# ------------------------------------------------------------------------------
+# Refer:    https://github.com/fluxoid-org/CyclismoProject/wiki/Tacx-Bushido-Brake-protocol
+# ------------------------------------------------------------------------------
+def msgUnpage02_TacxBushidoData (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+
+    fWheelSpeed         = sc.unsigned_short
+    nWheelSpeed         = 2
+    fCadence            = sc.unsigned_char
+    nCadence            = 3
+    fBalance            = sc.unsigned_char  # Pedalling force balance
+    nBalance            = 4
+    fUnknown            = sc.unsigned_short
+    fUnknown2           = sc.unsigned_char
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fWheelSpeed  + fCadence + fBalance + fUnknown + fUnknown2
+    tuple = struct.unpack (format, info)
+
+    WheelSpeed = tuple[nWheelSpeed]
+    Cadence = tuple[nCadence]
+    Balance = tuple[nBalance]
+    ShouldBeZero1 = tuple[5]
+    ShouldBeZero2 = tuple[6]
+
+    if debug.on(debug.Function):
+        logfile.Write("Received Bushido page %2.2d. Speed: %4.2f Cadence: %3.3d. Balance: %3.3d" % (tuple[1], WheelSpeed/10, Cadence, Balance))
+
+    if (ShouldBeZero1 != 0 or ShouldBeZero2 != 0):
+        logfile.Write("Received Bushido page %2.2d fields not zero: 0x%4.4X - 0x%2.2X" % (tuple[1], ShouldBeZero1, ShouldBeZero2))
+
+    return WheelSpeed, Cadence, Balance
+
+# ------------------------------------------------------------------------------
+
+def msgPage02_TacxBushidoData (Channel, Speed, Cadence, Balance) -> object:
+    DataPageNumber      = 2
+
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+
+    fWheelSpeed         = sc.unsigned_short
+    fCadence            = sc.unsigned_char
+    fBalance            = sc.unsigned_char  # Pedalling force balance
+    fUnknown            = sc.unsigned_short
+    fUnknown2           = sc.unsigned_char
+
+    format = sc.big_endian + fChannel + fDataPageNumber +  fWheelSpeed + fCadence + fBalance + fUnknown + fUnknown2
+    info   = struct.pack(format, Channel ,  DataPageNumber , int(Speed*10) ,  int(Cadence), int(Balance), 0, 0)
+
+    if debug.on(debug.Function):
+        logfile.Write("Writing Bushido page %2.2d. Wheelspeed: %4.2f Cadence: %3.3d. Balance: %3.3d" % (DataPageNumber, Speed*10, Cadence, Balance))
+
+    return info
+
+# ------------------------------------------------------------------------------
+# P a g e 04 Bushido
+#
+# 0x04 00 DD EE EE FF FF 00
+#
+# DD = Cadence? Replaced with 100 in log 7, no difference observed, possibly low power
+# EEEE = ?
+# FFFF = ?
+# Injecting 255 for all packets has no obvious effect on computer
+# ------------------------------------------------------------------------------
+# Refer:    https://github.com/fluxoid-org/CyclismoProject/wiki/Tacx-Bushido-Brake-protocol
+# ------------------------------------------------------------------------------
+def msgUnpage04_TacxBushidoData (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+
+    fField1             = sc.unsigned_char # 00
+    nField1             = 2
+    fField2             = sc.unsigned_char # Vspeed?
+    nField2             = 3
+    fField3             = sc.unsigned_short # Resistance?
+    nField3             = 4
+    fField4             = sc.unsigned_short # Resistance?
+    nField4             = 5
+    fField5             = sc.unsigned_char # 00
+    nField5             = 6
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fField1  + fField2 + fField3 + fField4 + fField5
+    tuple = struct.unpack (format, info)
+
+    Vspeed = tuple[nField2]
+    SBZ1    = tuple[nField1]
+    SBZ2    = tuple[nField5]
+    Res1    = tuple[nField3]
+    Res2    = tuple[nField4]
+
+    if debug.on(debug.Function):
+        logfile.Write("Received Bushido page %2.2d. Vspeed(?): 0x%2.2X Resistance 1: 0x%4.4X. Resistance 2: %4.4X" % (tuple[1], Vspeed, Res1, Res2))
+
+    if (SBZ1 != 0 or SBZ2 != 0):
+        logfile.Write ("Received Bushido page %2.2d fields not zero: 0x%2.2X - 0x%2.2X" % (tuple[1], SBZ1, SBZ2))
+
+    return Vspeed, Res1, Res2
+
+# ------------------------------------------------------------------------------
+# P a g e 08 Bushido  C o u n t e r
+# 0x08 00 LL LL LL 00 00 00
+#
+# LLLLLL = Some sort of counter, resets when pedalling stopped, could be longer...
+# Injecting 255 for all packets has no obvious effect on computer
+# ------------------------------------------------------------------------------
+# Refer:    https://github.com/fluxoid-org/CyclismoProject/wiki/Tacx-Bushido-Brake-protocol
+# ------------------------------------------------------------------------------
+def msgUnpage08_TacxBushidoData (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+
+    fField1             = sc.unsigned_char # 00
+    nField1             = 2
+    fField2             = sc.unsigned_char # LL
+    nField2             = 3
+    fField3             = sc.unsigned_short # LL LL
+    nField3             = 4
+    fField4             = sc.unsigned_short # 00 00
+    nField4             = 5
+    fField5             = sc.unsigned_char # 00
+    nField5             = 6
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fField1  + fField2 + fField3 + fField4 + fField5
+    tuple = struct.unpack (format, info)
+
+    LL = tuple[nField2]
+    LL = LL * 65536 + tuple[nField3]
+    SBZ1 = tuple[nField1]
+    SBZ2 = tuple[nField4]
+    SBZ3 = tuple[nField5]
+
+    if debug.on(debug.Function):
+        logfile.Write("Received Bushido page %2.2d. Counter: 0x%6.6d." % (tuple[1], LL))
+
+    if (SBZ1 or SBZ2 or SBZ3):
+        logfile.Write("Received Bushido counter page %2.2d fields not zero: 0x%2.2X - 0x%4.4X - 0x%2.2X" % (tuple[1], SBZ1, SBZ2))
+
+    return LL
+
+# ------------------------------------------------------------------------------
+# P a g e 16 Bushido   B r a k e  S t a t u s
+# Taken from switchabl/FortiusANT/tree/bushido be it on another page
+# 0x10 AA AA TT PB PB 00 00
+# ------------------------------------------------------------------------------
+def msgUnpage10_TacxBushidoData (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+
+    fAlarm              = sc.unsigned_short # alarm bitmask
+    nAlarm              = 2
+    fSBZ                = sc.unsigned_char  # 00
+    fTemperature        = sc.unsigned_char  # brake temperature (°C ?)
+    nTemperature        = 4
+    fPadding            = sc.unsigned_char * 3
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fSBZ + fAlarm + fTemperature + fPadding
+    tuple = struct.unpack (format, info)
+
+    Alarm       = tuple[nAlarm]
+    SBZ1        = tuple[3]
+    Temperature = tuple[nTemperature]
+    SBZ2        = tuple[5]
+
+    if   Alarm ==   1:  pass #  Do not flag this one for now - logfile.Write( "Temperature warning level 1 ! Temperature = %3.2d" % Temperature, True)
+    elif Alarm ==   2:  logfile.Write( "Temperature warning level 2 !! Temperature = %3.2d" % Temperature, True)
+    elif Alarm ==   3:  logfile.Write( "Temperature warning level 3 !!! Temperature = %3.2d" % Temperature, True)
+    elif Alarm ==   4:  logfile.Write( "Temperature warning level 4 !!!! Temperature = %3.2d" % Temperature, True)
+    elif Alarm ==   5:  logfile.Write( "Temperature warning level 5 !!!!! Temperature = %3.2d" % Temperature, True)
+    elif Alarm ==   8:  logfile.Write( "OVERVOLTAGE !!!! ", True)
+    elif Alarm ==  16:  logfile.Write( "OVERCURRENT level 1 !!!! ", True)
+    elif Alarm ==  32:  logfile.Write( "OVERCURRENT LEVEL 2 !!!! ", True)
+    elif Alarm == 128:  logfile.Write( "OVERSPEEDING !!!! ", True)
+    elif Alarm == 256:  logfile.Write( "UNDERVOLTAGE", True)
+    elif Alarm == 512:  logfile.Write( "COMMUNICATION ERROR", True)
+
+    if (SBZ1 or SBZ2):
+        logfile.Write ("Received Bushido brake status %2.2x page %2.2x - non zero fields:  0x%2.2X - 0x%6.6X" % (tuple[0], tuple[1], SBZ1, SBZ2))
+
+    return Alarm, Temperature
+
+# ------------------------------------------------------------------------------
+# P a g e 34 Bushido   Kicks in on brake when calibrating
+# 0x22 SP 00 XX 00 YY 00 00
+# Sequence:
+#   SP = 06 with XX sequencing 02 03 04 05
+#   SP = 03 with
+#       XX = 12 (0c) => rundown?
+#       XX = 00
+#       XX = 77 (4d)
+#       XX = 66 (42) and YY = (cal value as shown on VHU) * 10
+# ------------------------------------------------------------------------------
+def msgUnpage22_TacxBushidoData (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fIndex              = sc.unsigned_char
+
+    fField1             = sc.unsigned_char
+    nField1             = 3
+    fField2             = sc.unsigned_char
+    nField2             = 4
+    fField3             = sc.unsigned_char
+    nField3             = 5
+    fField4             = sc.unsigned_char
+    nField4             = 6
+    fField5             = sc.unsigned_char
+    nField5             = 7
+    fField6             = sc.unsigned_char
+    nField6             = 8
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fIndex + fField1  + fField2 + fField3 + fField4 + fField5 + fField6
+    tuple = struct.unpack (format, info)
+
+    Page = tuple[1]
+    Index = tuple[2]
+    Powerback = tuple[nField1]
+    Rev1 = tuple[nField2]
+    Rev2 = tuple[nField3]
+    Rev3 = tuple[nField4]
+    Rev4 = tuple[nField5]
+    Rev5 = tuple[nField6]
+
+    if (Index == 3) and (Rev1 == 66):
+        logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration value = %3.2f" % (Page, Index, Rev3/10), True)
+
+    if debug.on(debug.Function):
+        logfile.Write("Received Bushido calibration page %2.2d (subpage %2.2d). Value: 0x%2.2X-%2.2X-%2.2X-%2.2X-%2.2X-%2.2X" % (Page, Index, Powerback, Rev1, Rev2, Rev3, Rev4, Rev5))
+
+    return Powerback
+
+def msgpage22_TacxBushidoData (Channel, Subpage, Code, Calibration):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fIndex              = sc.unsigned_char
+    fZero1              = sc.unsigned_char
+    fCode               = sc.unsigned_char
+    fZero2              = sc.unsigned_char
+    fCal                = sc.unsigned_char
+    fZero3              = sc.unsigned_char
+    fZero4              = sc.unsigned_char
+
+    # 0x22 SP 00 XX 00 YY 00 00 00
+    format= sc.big_endian + fChannel + fDataPageNumber + fIndex + fZero1  + fCode + fZero2 + fCal + fZero3 + fZero4
+    DataPageNumber = 22
+    info = struct.pack(format, Channel, DataPageNumber, Subpage, 0, Code, 0, Calibration, 0, 0)
+    if debug.on(debug.Function):
+        logfile.Write("Writing Bushido page %2.2d (subpage %2.2d) - Code = %2.2x - Cal = %4.4d" % ( DataPageNumber, Subpage, Code, Calibration))
+
+    return info
+
+
+# ------------------------------------------------------------------------------
+# P a g e 35 Bushido   Kicks in on TTS/VHU when calibrating
+# 0x23 XX 00 00 00 00 00 00
+#
+# Sequence:
+#       XX = 63 start cycling?
+#       XX = 58 stop cycling when reached 40km/h
+#       XX = 4D resume cycling
+# ------------------------------------------------------------------------------
+def msgUnpage23_TacxBushidoData (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fIndex              = sc.unsigned_char
+
+    fField1             = sc.unsigned_short
+    nField1             = 3
+    fField2             = sc.unsigned_short
+    nField2             = 4
+    fField3             = sc.unsigned_short
+    nField3             = 5
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fIndex + fField1  + fField2 + fField3
+    tuple = struct.unpack (format, info)
+
+    Page = tuple[1]
+    Index =tuple[2]
+    SBZ1 = tuple[nField1]
+    SBZ2 = tuple[nField2]
+    SBZ3 = tuple[nField3]
+
+    logfile.Write("Received Bushido page %2.2d  - sub page %2.2x" % (Page, Index))
+
+    if (Index or SBZ2 or SBZ3 or SBZ1):
+        logfile.Write("Received Bushido page %2.2d - sub page %2.2x found non zero fields %4.4x - 4.4x - 4.4x." % (Page, Index, SBZ1, SBZ2, SBZ3))
+
+    return
+
+# ------------------------------------------------------------------------------
+# P a g e AD 01 Bushido   Serial Number
+# 0xAD 01 MM YY 00 00 DD DD
+# Mode: 02: Training - 03: Paused - 04: PC Control
+# YY = Procuction Year - 2000
+# DD DD DD = Device Number
+# ------------------------------------------------------------------------------
+def msgPageAD01_TacxBushidoData (Channel, Year, Number):
+    assert Year > 1999, "msgPageAD01_TacxBushidoData: Year has to be at least 2000"
+    DataPageNumber  = 0xad
+    Index           = 1
+    nYear           = int(Year) - int(2000)
+    nNumber         = int(Number)
+
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fIndex              = sc.unsigned_char  # payload[1] Second byte of the ANT+ datapage
+    fSBZ1               = sc.unsigned_char  # 00
+    fYear               = sc.unsigned_char  # YY
+    fSBZ2               = sc.unsigned_short # 00 00
+    fNumber             = sc.unsigned_short # DD DD
+
+    format = sc.big_endian +    fChannel + fDataPageNumber +  fIndex + fSBZ1 + fYear + fSBZ2 + fNumber
+    info   = struct.pack(format, Channel ,  DataPageNumber , Index ,   0,      nYear,  0,      nNumber)
+    if debug.on(debug.Function):
+        logfile.Write("Writing Bushido page %2.2d (subpage %2.2d) - YY = %2.2d - Serial = %6.6d" % (DataPageNumber, Index, nYear, nNumber))
+
+    return info
+
+# For HU unpage using msgUnpage173_01_TacxBushidoSerialMode instead
+
+
+# ------------------------------------------------------------------------------
+# P a g e (173) AD 02 Bushido   SW Version
+# 0xAD 02 MM mm rr rr 00 00
+# MM = major, mm = minor; rr rr = revision
+# ------------------------------------------------------------------------------
+def msgPageAD02_TacxBushidoData (Channel, Major, Minor, Revision):
+    DataPageNumber      = 0xad
+    Index               = 2
+
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fIndex              = sc.unsigned_char  # payload[2] Second byte of the ANT+ datapage
+    fMajor              = sc.unsigned_char  # MM
+    fMinor              = sc.unsigned_char  # MM
+    fRevision           = sc.unsigned_short  # rr rr
+    fSBZ                = sc.unsigned_short # 00 00
+
+    format = sc.big_endian +    fChannel + fDataPageNumber +  fIndex + fMajor + fMinor + fRevision + fSBZ
+    info   = struct.pack(format, Channel ,  DataPageNumber , Index ,  int(Major), int(Minor), int(Revision), 0)
+    if debug.on(debug.Function):
+        logfile.Write("Writing Bushido page %2.2d (subpage %2.2d): %2.2d - %2.2d - %4.4d" % (DataPageNumber, Index, Major, Minor, Revision))
+
+    return info
+
+def msgUnpageAD02_TacxBushidoData (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fIndex              = sc.unsigned_char
+
+    # Serial number last part MM-mm-rrrr as shown on TTS and as MM.mm.rrrr on VHU
+    # XX = ANT Device Type
+    fField1             = sc.unsigned_char  # MM
+    nField1             = 3
+    fField2             = sc.unsigned_char  # mm
+    nField2             = 4
+    fField3             = sc.unsigned_short # rrrr
+    nField3             = 5
+    fField4             = sc.unsigned_short  # 00 00
+    nField4             = 6
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fIndex + fField1  + fField2 + fField3 + fField4
+    tuple = struct.unpack (format, info)
+
+    Page        = tuple[1]
+    Index       = tuple[2]
+    Major       = tuple[nField1]
+    Minor       = tuple[nField2]
+    Revision    = tuple[nField3]
+    SBZ         = tuple[nField4]
+
+    if (Index != 2):
+        "Wrong subpage %2.2x, should be 0x02" % Index
+    else:
+        if (SBZ):
+            logfile.Write   ("Bushido SW version page %2.2d (subpage %2.2d). Not zero field: %4.4x" % (Page, Index, SBZ))
+
+        if debug.on(debug.Function):
+            logfile.Write("Received Bushido SW version page %2.2d (subpage %2.2d). SW version %2d.%2d.%4d" % (Page, Index, Major, Minor, Revision))
+
+    return
+
+# ------------------------------------------------------------------------------
+# P a g e DC (220) Bushido  P o w e r  T a r g e t
+# ------------------------------------------------------------------------------
+def msgPageDC_TacxBushidoDataPower (Channel, Target, Weight):
+    DataPageNumber      = 0xdc
+    Index = 1
+    Mode =  1
+
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fIndex              = sc.unsigned_char  # payload[2] Second byte of the ANT+ datapage
+    fMode               = sc.unsigned_char  # 01
+    fPower              = sc.unsigned_short  # PP PP
+    fWeight             = sc.unsigned_char   # WW
+    fZero               = sc.unsigned_short  # 00 00
+
+    format = sc.big_endian +    fChannel + fDataPageNumber +  fIndex + fMode + fPower + fWeight + fZero
+    info   = struct.pack(format, Channel ,  DataPageNumber , Index , Mode, int(Target), int(Weight), 0)
+    if debug.on(debug.Function):
+        logfile.Write("Writing Bushido page %2.2d (subpage %2.2d) - Power Target = %3.3d - Weight = %3.3d" % (DataPageNumber, Index, Target, Weight))
+
+    return info
+
+# ------------------------------------------------------------------------------
+# P a g e DC (220) Bushido  S l o p e  T a r g e t
+# ------------------------------------------------------------------------------
+def msgPageDC_TacxBushidoDataSlope (Channel, Target, Weight):
+    DataPageNumber      = 0xdc
+    Index = 1
+    Mode  = 0
+    Sign  = 0
+    Slope = Target * 10
+    if Target  < 0:
+        Sign = 255
+        Slope = (Target * 10) + 256
+
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fIndex              = sc.unsigned_char  # payload[2] Second byte of the ANT+ datapage
+    fMode               = sc.unsigned_char  # 00
+    fSign               = sc.unsigned_char  # ZZ
+    fSlope              = sc.unsigned_char  # XX
+    fWeight             = sc.unsigned_char  # WW
+    fZero               = sc.unsigned_short # 00 00
+
+    format = sc.big_endian +    fChannel + fDataPageNumber +  fIndex + fMode + fSign + fSlope + fWeight + fZero
+    info   = struct.pack(format, Channel ,  DataPageNumber , Index , Mode, Sign, int(Slope), int(Weight), 0)
+    if debug.on(debug.Function):
+        logfile.Write("Writing Bushido page %2.2d (subpage %2.2d) - Slope Target = %3.2d - Weight = %3.3d" % (DataPageNumber, Index, Target, Weight))
+
+    return info
+
+# ------------------------------------------------------------------------------
+# P a g e DD (221) Bushido  V H U  p a g e
+# ------------------------------------------------------------------------------
+
+keyDictCode = {
+    0: "Nothing",
+    1: "Left",
+    2: "Up",
+    3: "Enter",
+    4: "Down",
+    5: "Right"
+}
+
+keyDictFlag = {
+    0: "Normal",
+    8: "Long (> 0.5s)",
+    12: "Very long (> 2.5s)"
+}
+
+def msgUnpageDD_TacxBushidoData (info):
+    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
+    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fIndex              = sc.unsigned_char
+    fPayload            = sc.unsigned_char * 6
+
+    format= sc.big_endian + fChannel + fDataPageNumber + fIndex + fPayload
+    tuple = struct.unpack (format, info)
+
+    Page        = tuple[1]
+    Index       = tuple[2]
+    Payload1    = tuple[3]
+    Payload2    = tuple[4]
+    Payload3    = tuple[5]
+    Payload4    = tuple[6]
+    Payload5    = tuple[7]
+    Payload6    = tuple[8]
+
+    if Index == 16:
+        # Button page
+        KeyFlag = (Payload1 >> 4) & 15
+        KeyCode = Payload1 & 15
+        logfile.Write("You pressed the ==" + keyDictCode[KeyCode] + "== button for a " + keyDictFlag[KeyFlag] + " time.")
+    else:
+        logfile.Write("Received Bushido page %2.2d (subpage %2.2d) not decoded." % (Page, Index))
+
+
+    if (Payload2 or Payload3 or Payload4 or Payload5 or Payload6):
+        logfile.Write("Received Bushido page %2.2d - sub page %2.2x found non zero fields %2.2x-%2.2x-%2.2x-%2.2x-%2.2x"
+                      % (Page, Index, Payload2, Payload3, Payload4, Payload5, Payload6))
+
+    return
+
