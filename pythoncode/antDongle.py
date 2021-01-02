@@ -199,7 +199,6 @@ BHU_Alarm_SpeedTooHigh       = 0x0080
 BHU_Alarm_Undervoltage       = 0x0100
 BHU_Alarm_CommunicationError = 0x8000
 
-
 DeviceNumber_EA     = 57590    # short Slave device-number for ExplorANT
 DeviceNumber_FE     = 57591    #       These are the device-numbers FortiusANT uses and
 DeviceNumber_HRM    = 57592    #       slaves (TrainerRoad, Zwift, ExplorANT) will find.
@@ -2937,13 +2936,28 @@ def msgUnpage10_TacxBushidoData (info):
 # P a g e 34 Bushido   Kicks in on brake when calibrating
 # 0x22 SP 00 XX 00 YY 00 00
 # Sequence:
-#   SP = 06 with XX sequencing 02 03 04 05
+#   SP = 06
+#        XX = 0x02 Calibration Mode
+#        XX = 0x04 Up to speed
+#        XX = 0x05 Slowing down
+#        XX = 01, 0b, and 0c seen as well => when calibration failed?
+#        XX = 00 calibration requested
 #   SP = 03 with
-#       XX = 12 (0c) => rundown?
-#       XX = 00
-#       XX = 77 (4d)
-#       XX = 66 (42) and YY = (cal value as shown on VHU) * 10
+#        XX = 0x0c No error
+#        XX = 0x4d calibration value ready
+#        XX = 0x42 calibrated => YY = (cal value as shown on VHU) * 10
+#        XX = 00 not in calibration mode
 # ------------------------------------------------------------------------------
+BBR_Cal_State_NO_CAL    = 0
+BBR_Cal_State_CAL_MODE  = 1
+BBR_Cal_State_CAL_REQ   = 2
+BBR_Cal_State_AT_SPEED  = 3
+BBR_Cal_State_SLOW_DOWN = 4
+BBR_Cal_State_NO_ERROR  = 5
+BBR_Cal_State_READY     = 6
+BBR_Cal_State_VAL_RDY   = 7
+BBR_Cal_State_ERROR     = 8
+
 def msgUnpage22_TacxBushidoData (info):
     fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
     fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
@@ -2974,13 +2988,48 @@ def msgUnpage22_TacxBushidoData (info):
     Rev4 = tuple[nField5]
     Rev5 = tuple[nField6]
 
-    if (Index == 3) and (Rev1 == 66):
-        logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration value = %3.2f" % (Page, Index, Rev3/10), True)
+    calMode  = BBR_Cal_State_NO_CAL
+    calValue = 0
+    unknown  = False
+    if Index == 6:
+        if Rev1 == 2:
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). In calibration mode" % (Page, Index))
+            calMode = BBR_Cal_State_CAL_MODE
+        elif Rev1 == 4:
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: up to speed" % (Page, Index))
+            calMode = BBR_Cal_State_AT_SPEED
+        elif Rev1 == 5:
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: slowing down" % (Page, Index))
+            calMode = BBR_Cal_State_SLOW_DOWN
+        elif Rev1 == 0x0a:
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: slowing down" % (Page, Index))
+            calMode = BBR_Cal_State_ERROR
+        elif Rev1 == 0:
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode requested" % (Page, Index))
+            calMode = BBR_Cal_State_CAL_REQ
+        else: unknown = True
+    elif Index == 3:
+        if Rev1 == int(0x0c):
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: no error" % (Page, Index))
+            calMode = BBR_Cal_State_NO_ERROR
+        elif Rev1 == int(0x4d):
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: calibrated" % (Page, Index))
+            calMode = BBR_Cal_State_READY
+        elif Rev1 == int(0x42):
+            calValue = Rev3/10
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration value = %3.2f" % (Page, Index, Rev3/10))
+            calMode = BBR_Cal_State_VAL_RDY
+        elif Rev1 == 0:
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Not in calibration mode." % (Page, Index))
+        else: unknown = True
+    else: unknown = True
 
-    if debug.on(debug.Function):
-        logfile.Write("Received Bushido calibration page %2.2d (subpage %2.2d). Value: 0x%2.2X-%2.2X-%2.2X-%2.2X-%2.2X-%2.2X" % (Page, Index, Powerback, Rev1, Rev2, Rev3, Rev4, Rev5))
+    if unknown:
+        logfile.Write(
+            "Received unknown Bushido calibration page %2.2d (subpage %2.2d). Value: 0x%2.2X-%2.2X-%2.2X-%2.2X-%2.2X-%2.2X"
+            % (Page, Index, Powerback, Rev1, Rev2, Rev3, Rev4, Rev5), True)
 
-    return Powerback
+    return Powerback, calMode, calValue
 
 def msgpage22_TacxBushidoData (Channel, Subpage, Code, Calibration):
     fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
@@ -3008,9 +3057,9 @@ def msgpage22_TacxBushidoData (Channel, Subpage, Code, Calibration):
 # 0x23 XX 00 00 00 00 00 00
 #
 # Sequence:
-#       XX = 63 start cycling?
-#       XX = 58 stop cycling when reached 40km/h
-#       XX = 4D resume cycling
+#       XX = 63 start calibration
+#       XX = 58 request calibration status
+#       XX = 4D request calibration status
 # ------------------------------------------------------------------------------
 def msgUnpage23_TacxBushidoData (info):
     fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
@@ -3036,7 +3085,7 @@ def msgUnpage23_TacxBushidoData (info):
     logfile.Write("Received Bushido page %2.2d  - sub page %2.2x" % (Page, Index))
 
     if (Index or SBZ2 or SBZ3 or SBZ1):
-        logfile.Write("Received Bushido page %2.2d - sub page %2.2x found non zero fields %4.4x - 4.4x - 4.4x." % (Page, Index, SBZ1, SBZ2, SBZ3))
+        logfile.Write("Received Bushido page %2.2d - sub page %2.2x found non zero fields %4.4x - %4.4x - %4.4x." % (Page,Index, SBZ1, SBZ2, SBZ3))
 
     return
 
@@ -3044,7 +3093,7 @@ def msgUnpage23_TacxBushidoData (info):
 # P a g e AD 01 Bushido   Serial Number
 # 0xAD 01 MM YY 00 00 DD DD
 # Mode: 02: Training - 03: Paused - 04: PC Control
-# YY = Procuction Year - 2000
+# YY = Production Year - 2000
 # DD DD DD = Device Number
 # ------------------------------------------------------------------------------
 def msgPageAD01_TacxBushidoData (Channel, Year, Number):

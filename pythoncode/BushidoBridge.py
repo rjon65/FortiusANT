@@ -3,21 +3,34 @@
 #-------------------------------------------------------------------------------
 __version__ = "2020-12-17"
 # 2020-12-17    First version based on ExplorAnt
+#
+# Man in the middle, forwarding ANT messages on either:
+# - Bushido Brake channel type
+#   - Brake master to either HU or TTS4 (Bridge is slave to Brake)
+#     => this requires to first connect the Bridge as a Brake to HU/TTS4
+#        Set ConnectHUtoBrakeMode to True
+#   - Option to add a Bridge slave interface to HU to drive Brake settings
+#
+#   Bushido Brake-(M) ---ch7---> (S)-Bridge-(M) ---ch6---> (S)-Head Unit
+#                                      |                          |
+#                                     (S)                        (M)
+#                                      |___________ch5____________|
+#
+# - Bushido Head Unit channel type (Bridge is slave to HU)
+#   - HU master to TTS4 (but not happening on later versions of TTS4)
+#
+#   Bushido HU-(M) ---ch7---> (S)-Bridge-(M) ---ch6---> (S)-TTS4
+#
+#   ch7 = bridge slave channel: connects to master
+#   ch6 = bridge master channel: connects to slave
+#   ch5 = channel that connects to HU master
+#
+# Decodes data pages thus forwarded and can be exported into two CSV files
+# - BushidoBridge.csv: unknown/uninteresting pages/fields for analysis
+# - BushidoBridgeLog.csv: known fields
 #-------------------------------------------------------------------------------
-import argparse
-import binascii
-import math
-import numpy
-import os
-import pickle
-import platform, glob
-import random
-import sys
 import struct
-import threading
 import time
-import usb.core
-import wx
 import random
 
 from datetime import datetime
@@ -52,7 +65,7 @@ def WriteCsv(info, TX = False):
     if firstWrite:
         firstWrite = False
         startLogging = datetime.now()
-        logText = "Timestamp; Channel; Page; Payload 1; Payload 2; Payload 3; Payload 4;Payload 5; Payload 6; Payload 7; Mode \n"
+        logText = "Timestamp;Channel;Page;Payload 1;Payload 2;Payload 3;Payload 4;Payload 5;Payload 6;Payload 7;Mode\n"
     else:
         logText = ""
 
@@ -82,16 +95,16 @@ def WriteCsv(info, TX = False):
     delta = now - startLogging
     # millisecond resolution should be OK
     microDelta = int(delta.microseconds / 1000) + 1000*(delta.seconds)
-    logText += str(microDelta) + "; "
-    logText += str(int(tuple[nChannel])) + "; "
-    logText += str(int(tuple[nDataPageNumber])) + "; "
-    logText += str(int(tuple[nData1])) + "; "
-    logText += str(int(tuple[nData2])) + "; "
-    logText += str(int(tuple[nData3])) + "; "
-    logText += str(int(tuple[nData4])) + "; "
-    logText += str(int(tuple[nData5])) + "; "
-    logText += str(int(tuple[nData6])) + "; "
-    logText += str(int(tuple[nData7])) + "; "
+    logText += str(microDelta) + ";"
+    logText += str(int(tuple[nChannel])) + ";"
+    logText += str(int(tuple[nDataPageNumber])) + ";"
+    logText += str(int(tuple[nData1])) + ";"
+    logText += str(int(tuple[nData2])) + ";"
+    logText += str(int(tuple[nData3])) + ";"
+    logText += str(int(tuple[nData4])) + ";"
+    logText += str(int(tuple[nData5])) + ";"
+    logText += str(int(tuple[nData6])) + ";"
+    logText += str(int(tuple[nData7])) + ";"
     if TX:
         logText += "TX\n"
     else:
@@ -157,9 +170,7 @@ BR_Res2     = 0
 HU_Res      = 0
 HU_Target   = 0
 
-
 fileLog = "BushidoBridgeLog" + datetime.now().strftime('%Y-%m-%d %H-%M-%S') + ".csv"
-
 if clv.csvExport:
     fileLog = open(fileLog, "w+")
 
@@ -172,13 +183,13 @@ def WriteLog( TargetIsPower = True ):
         firstLog = False
         startLog = datetime.now()
         if (TargetIsPower):
-            logText = "Timestamp; HU_PowerTarget; "
+            logText = "Timestamp;HU_PowerTarget;"
         else:
-            logText = "Timestamp; HU_SlopeTarget; "
+            logText = "Timestamp;HU_SlopeTarget;"
                  
-        logText += "BR_Power; HU_Power; BR_Speed; HU_Speed; BR_Vspeed; BR_Cadence;  HU_Cadence; BR_Balance; HU_Balance; " \
-                     "BR_Temp; HU_Temp; BR_Distance; HU_Distance; BR_Pback; HU_Pback; BR_Alarm; HU_Alarm; " \
-                     "HU_Res; BR_ResL; BR_ResR; BR_Res1; BR_Res2 \n"
+        logText += "BR_Power;HU_Power;BR_Speed;HU_Speed;BR_Vspeed;BR_Cadence; HU_Cadence;BR_Balance;HU_Balance;" \
+                     "BR_Temp;HU_Temp;BR_Distance;HU_Distance;BR_Pback;HU_Pback;BR_Alarm;HU_Alarm;" \
+                     "HU_Res;BR_ResL;BR_ResR;BR_Res1;BR_Res2\n"
     else:
         logText = ""
 
@@ -186,11 +197,11 @@ def WriteLog( TargetIsPower = True ):
     delta = now - startLog
     # millisecond resolution should be OK
     msecDelta = int(delta.microseconds / 1000) + 1000*(delta.seconds)
-    logText += str(msecDelta) + "; " + str(HU_Target) + "; " + str(BR_Power) + "; " + str(HU_Power) + "; " + str(BR_Speed) \
-            + "; " + str(HU_Speed) + "; " + str(BR_Vspeed) + "; " + str(BR_Cadence) + "; " + str(HU_Cadence) + "; " + str(BR_Balance)  \
-            + "; " + str(HU_Balance) + "; " + str(BR_Temp) + "; " + str(HU_Temp) + "; " + str(BR_Distance) + "; " + str(HU_Distance) \
-            + "; " + str(BR_Pback) + "; " + str(HU_Pback) + "; " + format(BR_Alarm,'#018b') + "; " + format(HU_Alarm, '#018b') + "; " + str(HU_Res) \
-            + "; " + str(BR_ResL) + "; " + str(BR_ResR) + "; " + str(BR_Res1) + "; " + str(BR_Res2) + "\n"
+    logText += str(msecDelta) + ";" + str(HU_Target) + ";" + str(BR_Power) + ";" + str(HU_Power) + ";" + str(BR_Speed) \
+            + ";" + str(HU_Speed) + ";" + str(BR_Vspeed) + ";" + str(BR_Cadence) + ";" + str(HU_Cadence) + ";" + str(BR_Balance)  \
+            + ";" + str(HU_Balance) + ";" + str(BR_Temp) + ";" + str(HU_Temp) + ";" + str(BR_Distance) + ";" + str(HU_Distance) \
+            + ";" + str(BR_Pback) + ";" + str(HU_Pback) + ";" + format(BR_Alarm,'#018b') + ";" + format(HU_Alarm, '#018b') + ";" + str(HU_Res) \
+            + ";" + str(BR_ResL) + ";" + str(BR_ResR) + ";" + str(BR_Res1) + ";" + str(BR_Res2) + "\n"
 
     try:
         fileLog.write(logText)
@@ -198,7 +209,6 @@ def WriteLog( TargetIsPower = True ):
     except:
         print("WriteLog (" + logText + ") called, but file is not opened.")
         pass
-
 
 # ==============================================================================
 # Main program; Command line parameters
@@ -249,117 +259,121 @@ else:
 AntDongle = ant.clsAntDongle(p)
 logfile.Console (AntDongle.Message)
 
-# Maybe these need to end up as command line arguments
+# ------------------------------------------------------------------------------
+# Configure what we want to get done
+# Maybe these need to end up as command line arguments in the end
+# ------------------------------------------------------------------------------
+# Pair the HU with the Bridge as master - exits when done
+ConnectHUtoBrakeMode = False
 
-# Pair the HU with the Bridge as master
-PairHUwithBridge = False
+# HU to be paired - drive Brake through HU?
+pairHU = False
 
-# Configure the master channel - keep this under local control
+# Calibration needed
+calibrateBrake = True
+
+# Slave device on bridge to be paired?
+pairAsSlave = True
+
+# Master device on bridge to be paired?
+pairAsMaster = True
+
+# If HU connection mode do not need to pair HU or Slave
+if ConnectHUtoBrakeMode:
+    pairHU          = False
+    pairAsSlave     = False
+    pairAsMaster    = False
+
+# Configurations kept under local control
+# The bridge master channel - connects to slave
 masterDeviceNumber = clv.deviceNr
 masterChannelID = 6
 
-# Configure the slave channel - keep this under local control
+# The bridge slave channel - connects to master
 slaveChannelID = 7
 slaveDeviceNumber = 0  # Wildcard - number assigned by master
 
-# HU
-HUDeviceNumber = 0
+# The optional HU (master)
+HUDeviceNumber = 0 # Wildcard - number assigned by master
+huChannelID = ant.channel_VHU_s
 
-# Following is for setting target power auto
-simulatePower = True
-# Up and down in the following power target range
-minTarget = 150
-maxTarget = 300
-increment = 10
-Weight = 10  # flywheel??
-period = 10  # Increase/decrease in seconds
+if (clv.bridgeHU):
+    # Check traffic between master BHU and slave TTS4 (paired with Brake)
+    bridgeDeviceTypeID = ant.DeviceTypeID_BHU
+    bridgeTypeName     = "Head Unit"
+    pairHU             = False
+    welcome            = " I N    H E A D   U N I T    M O D E ..."
+else:
+    # Monitor traffic between master Brake and slave BHU or TTS4 (paired with Bridge!!!!)
+    bridgeDeviceTypeID = ant.DeviceTypeID_BSH
+    bridgeTypeName     = "Bushido Brake"
+    welcome            = ""
 
-simulateSlope = False
-if simulateSlope:
-    minTarget = -5.0
-    maxTarget =  5.0
-    increment = 0.5
-    Weight    = 82 # in this case athlete + bicycle weight
-    simulatePower = False
+bridgeNetworkNumber = 0x01
+bridgeRfFrequency   = ant.RfFrequency_2460Mhz
+bridgeChannelPeriod = 0x1000
+bridgeTransmitPower = ant.TransmitPower_0dBm
 
-Target = minTarget
+# Serial and version messages
+slaveSerialMsg = ant.ComposeMessage(ant.msgID_BroadcastData,
+                                    ant.msgPageAD01_TacxBushidoData(slaveChannelID, 2015, 2015))
+slaveSWmsg = ant.ComposeMessage(ant.msgID_BroadcastData, ant.msgPageAD02_TacxBushidoData(slaveChannelID, 1, 2, 3456))
 
-# HU (paired as slave)
-pairedHU = False
+# Serial and version messages
+masterSerialMsg = ant.ComposeMessage(ant.msgID_BroadcastData,
+                                     ant.msgPageAD01_TacxBushidoData(masterChannelID, 2020, 2020))
+masterSWmsg = ant.ComposeMessage(ant.msgID_BroadcastData, ant.msgPageAD02_TacxBushidoData(masterChannelID, 5, 6, 7890))
 
-# Slave device on bridge paired
-pairedAsSlave = True
+# ------------------------------------------------------------------------------
+# Simulating a trainer: oscillate between min and max Target by +/- increment
+# Power target
+simulatePowerTraining = True
+targetIncrement       = 10
+Weight                = 10  # flywheel??
+Target                = 150 # target power at start
 
-# Master device on bridge paired
-pairedAsMaster = False
+# Slope target
+simulateSlopeTraining = False
+if simulateSlopeTraining:
+    targetIncrement = 0.5
+    Weight          = 82 # in this case athlete + bicycle weight
+    Target          = 0  # target grade at start
+    simulatePowerTraining = False
 
+# ------------------------------------------------------------------------------
 # This is the main loop
+# ------------------------------------------------------------------------------
 while (AntDongle.OK):
     try:
-        if (clv.bridgeHU):
-            # Check traffic between BHU and TTS4 (paired with Brake)
-            bridgeDeviceTypeID = ant.DeviceTypeID_BHU
-        else:
-            # Monitor traffic between BHU or TTS4 (paired with Bridge!!!!) and Brake
-            bridgeDeviceTypeID = ant.DeviceTypeID_BSH
-
-        bridgeNetworkNumber 	= 0x01
-        bridgeRfFrequency 	= ant.RfFrequency_2460Mhz
-        bridgeChannelPeriod 	= 0x1000
-        bridgeTransmitPower	= ant.TransmitPower_0dBm
-
-        # HU (pair as slave)
-        if PairHUwithBridge: pairedHU = True # Not needed
-
-        # slave device on bridge
-        if PairHUwithBridge: pairedAsSlave = True # Not needed
-        # Serial and version messages
-        slaveSerialMsg  = ant.ComposeMessage(ant.msgID_BroadcastData, ant.msgPageAD01_TacxBushidoData(slaveChannelID, 2015, 2015))
-        slaveSWmsg      = ant.ComposeMessage(ant.msgID_BroadcastData, ant.msgPageAD02_TacxBushidoData(slaveChannelID, 1, 2, 3456))
-
-        # Serial and version messages
-        masterSerialMsg = ant.ComposeMessage(ant.msgID_BroadcastData, ant.msgPageAD01_TacxBushidoData(masterChannelID, 2020, 2020))
-        masterSWmsg     = ant.ComposeMessage(ant.msgID_BroadcastData, ant.msgPageAD02_TacxBushidoData(masterChannelID, 5, 6, 7890))
-
         # ----------------------------------------------------------------------
         # Reset and Calibrate ANT+ dongle
         # ----------------------------------------------------------------------
         AntDongle.ResetDongle()
         AntDongle.Calibrate()
-
-        # ----------------------------------------------------------------------
-        # Open channels
-        # -----------------------------------------------------------------------
-        welcome = ""
-
         # ----------------------------------------------------------------------
         # Get info from the devices
         # ----------------------------------------------------------------------
-        logfile.Console("Listening, press Ctrl-C to exit")
-
         while not AntDongle.DongleReconnected:
             StartTime = time.time()
-
-            if (not clv.bridgeHU): # Activate HU as master controlling brake
+            # HU slave only to be used in combination with Bushido Brake bridge
+            if pairHU:
                 logfile.Console(
-                    'Configuring as slave BHU device %s on Bridge channel %s' % (0, ant.channel_VHU_s))
+                    'Configuring as slave HU device with number %s on channel %s' % (0, huChannelID))
                 messages = [
-                    ant.msg42_AssignChannel(ant.channel_VHU_s, ant.ChannelType_BidirectionalReceive, 0x01),
-                    ant.msg51_ChannelID(ant.channel_VHU_s, 0, ant.DeviceTypeID_BHU, 0),
-                    ant.msg45_ChannelRfFrequency(ant.channel_VHU_s, bridgeRfFrequency),
-                    ant.msg43_ChannelPeriod(ant.channel_VHU_s, bridgeChannelPeriod),
-                    ant.msg60_ChannelTransmitPower(ant.channel_VHU_s, bridgeTransmitPower),
-                    ant.msg4B_OpenChannel(ant.channel_VHU_s),
-                    ant.msg4D_RequestMessage(ant.channel_VHU_s, ant.msgID_ChannelID)
+                    ant.msg42_AssignChannel(huChannelID, ant.ChannelType_BidirectionalReceive, 0x01),
+                    ant.msg51_ChannelID(huChannelID, 0, ant.DeviceTypeID_BHU, 0),
+                    ant.msg45_ChannelRfFrequency(huChannelID, bridgeRfFrequency),
+                    ant.msg43_ChannelPeriod(huChannelID, bridgeChannelPeriod),
+                    ant.msg60_ChannelTransmitPower(huChannelID, bridgeTransmitPower),
+                    ant.msg4B_OpenChannel(huChannelID),
+                    ant.msg4D_RequestMessage(huChannelID, ant.msgID_ChannelID)
                 ]
                 AntDongle.Write(messages)
 
-                logfile.Console("Connecting to BHU as slave. This may take a while .....")
+                logfile.Console("Connecting to HU as slave. This may take a while .....")
 
-                #if DataPageNumber == 173 and SubPageNumber == 0x01:
-                #    Mode, Year, DeviceNumber = ant.msgUnpage173_01_TacxBushidoSerialMode(info)
                 iteration = 0
-                while (not pairedHU):
+                while pairHU:
                     # Pairing with HU - act as slave
                     iteration += 1
 
@@ -374,7 +388,7 @@ while (AntDongle.OK):
                         # ---------------------------------------------------------------
                         # Check msgID_ChannelID found on  correct channel
                         # ---------------------------------------------------------------
-                        if (Channel == ant.channel_VHU_s) and (id == ant.msgID_ChannelID):
+                        if (Channel == huChannelID) and (id == ant.msgID_ChannelID):
                             # -----------------------------------------------------------
                             # Check if correct DeviceType is discovered with DeviceNumber assigned
                             # -----------------------------------------------------------
@@ -382,22 +396,20 @@ while (AntDongle.OK):
                             if DeviceTypeID == ant.DeviceTypeID_BHU:
                                 if DeviceNumber:
                                     HUDeviceNumber = DeviceNumber
-                                    logfile.Write("Bridge: found master HU device with number %6.6d on slave channel %2.2d" % (
-                                    HUDeviceNumber,  ant.channel_VHU_s), True)
-                                    pairedHU = True
+                                    logfile.Write("Bridge: found master HU device with number %s on slave channel %s" % (
+                                    HUDeviceNumber,  huChannelID), True)
+                                    pairHU = False
                                     break
                                 elif (iteration % 10 == 0):
                                     logfile.Console("%6s - HU device number not assigned yet." % iteration)
 
                     messages = []
-                    if (not pairedHU):
-                        msg = ant.msg4D_RequestMessage( ant.channel_VHU_s, ant.msgID_ChannelID)
-                        messages.append(msg)
+                    if pairHU:
+                        msg = ant.msg4D_RequestMessage(huChannelID, ant.msgID_ChannelID)
+                        messages = [msg]
                     else:
-                        pass # adapt messages later
-                        # Send serial and version data
-                        # messages.append(slaveSerialMsg)
-                        # messages.append(slaveSWmsg)
+                        messages = [slaveSerialMsg]
+                        messages.append(slaveSWmsg)
 
                     # Write collected messages
                     AntDongle.Write(messages, False, False)
@@ -409,312 +421,284 @@ while (AntDongle.OK):
                     if SleepTime > 0:
                         time.sleep(SleepTime)
             else:
-                welcome = " I N    H E A D   U N I T    M O D E ..."
+                logfile.Console('NO slave HU device configured!')
 
-            logfile.Console(
-                'Configuring as master ANT+ device %s on Bridge channel %s' % (masterDeviceNumber, masterChannelID))
-            messages = [
-                ant.msg42_AssignChannel(masterChannelID, ant.ChannelType_BidirectionalTransmit, bridgeNetworkNumber),
-                ant.msg51_ChannelID(masterChannelID, masterDeviceNumber, bridgeDeviceTypeID, ant.TransmissionType_IC),
-                ant.msg45_ChannelRfFrequency(masterChannelID, bridgeRfFrequency),
-                ant.msg43_ChannelPeriod(masterChannelID, bridgeChannelPeriod),
-                ant.msg60_ChannelTransmitPower(masterChannelID, bridgeTransmitPower),
-                ant.msg4B_OpenChannel(masterChannelID),
-                ant.msg4D_RequestMessage(masterChannelID, ant.msgID_ChannelID)
-            ]
-            AntDongle.Write(messages)
+            if pairAsMaster:
+                logfile.Console(
+                    'Bridge %s type: configuring as master device %s on Bridge channel %s' % (bridgeTypeName, masterDeviceNumber, masterChannelID))
+                messages = [
+                    ant.msg42_AssignChannel(masterChannelID, ant.ChannelType_BidirectionalTransmit, bridgeNetworkNumber),
+                    ant.msg51_ChannelID(masterChannelID, masterDeviceNumber, bridgeDeviceTypeID, ant.TransmissionType_IC),
+                    ant.msg45_ChannelRfFrequency(masterChannelID, bridgeRfFrequency),
+                    ant.msg43_ChannelPeriod(masterChannelID, bridgeChannelPeriod),
+                    ant.msg60_ChannelTransmitPower(masterChannelID, bridgeTransmitPower),
+                    ant.msg4B_OpenChannel(masterChannelID),
+                    ant.msg4D_RequestMessage(masterChannelID, ant.msgID_ChannelID)
+                ]
+                AntDongle.Write(messages)
+                logfile.Console("Connecting as master.")
 
-            logfile.Console("Connecting as master.")
-            while (not pairedAsMaster):
-                # Connecting to slave device  - acting as a master
-                StartTime = time.time()
+                while pairAsMaster:
+                    # Connecting to slave device  - acting as a master
+                    StartTime = time.time()
 
-                data = AntDongle.Read(False)
-
-                for d in data:
-                    synch, length, id, info, checksum, _rest, Channel, DataPageNumber = ant.DecomposeMessage(d)
-                    if ((Channel == masterChannelID) and (id == ant.msgID_ChannelID)):
-                        Channel, DeviceNumber, DeviceTypeID, TransmissionType = ant.unmsg51_ChannelID(info)
-                        # -----------------------------------------------------------
-                        # Check if correct  DeviceType is discovered
-                        # -----------------------------------------------------------
-                        if (DeviceTypeID == bridgeDeviceTypeID):
-                            logfile.Write("ANT+ Bridge: connected as master %6.6d on channel %2.2d" % (DeviceNumber, Channel), True)
-                            pairedAsMaster = True
-                            break
-
-                messages = []
-                if (not pairedAsMaster):
-                    msg = ant.msg4D_RequestMessage(masterChannelID, ant.msgID_ChannelID)
-                    messages.append(msg)
-                else:
-                    # Send serial and version data
-                    messages.append(masterSerialMsg)
-                    messages.append(masterSWmsg)
-
-                AntDongle.Write(messages, False, False)
-
-                # -------------------------------------------------------
-                # WAIT So we do not cycle faster than 2 x per second
-                # -------------------------------------------------------
-                SleepTime = 0.5 - (time.time() - StartTime)
-                if SleepTime > 0:
-                    time.sleep(SleepTime)
-
-            # End of Master connection
-
-            logfile.Console(
-                'Configuring as slave ANT+ device %s on Bridge channel %s' % (slaveDeviceNumber, slaveChannelID))
-            messages = [
-                ant.msg42_AssignChannel(slaveChannelID, ant.ChannelType_BidirectionalReceive, bridgeNetworkNumber),
-                ant.msg51_ChannelID(slaveChannelID, slaveDeviceNumber, bridgeDeviceTypeID, 0),
-                ant.msg45_ChannelRfFrequency(slaveChannelID, bridgeRfFrequency),
-                ant.msg43_ChannelPeriod(slaveChannelID, bridgeChannelPeriod),
-                ant.msg60_ChannelTransmitPower(slaveChannelID, bridgeTransmitPower),
-                ant.msg4B_OpenChannel(slaveChannelID)
-            ]
-            AntDongle.Write(messages, True, False)
-
-            logfile.Console ("Connecting as slave - needs master device to be active ...")
-            iteration = 0
-            while (not pairedAsSlave):
-                # Pairing with Brake - act as slave
-                iteration += 1
-
-                StartTime = time.time()
-                # -------------------------------------------------------------------
-                # Receive response from channels
-                # -------------------------------------------------------------------
-                data = AntDongle.Read(False)
-
-                for d in data:
-                    synch, length, id, info, checksum, rest, Channel, DataPageNumber = ant.DecomposeMessage(d)
-                    # ---------------------------------------------------------------
-                    # Check msgID_ChannelID found on  correct channel
-                    # ---------------------------------------------------------------
-                    if (Channel == slaveChannelID) and (id == ant.msgID_ChannelID):
-                        # -----------------------------------------------------------
-                        # Check if correct DeviceType is discovered with DeviceNumber assigned
-                        # -----------------------------------------------------------
-                        Channel, DeviceNumber, DeviceTypeID, TransmissionType = ant.unmsg51_ChannelID(info)
-                        if DeviceTypeID == bridgeDeviceTypeID:
-                            if DeviceNumber:
-                                slaveDeviceNumber = DeviceNumber
-                                logfile.Write("Bridge: found master device with number %6.6d on slave channel %2.2d" % (slaveDeviceNumber, slaveChannelID), True)
-                                pairedAsSlave = True
+                    data = AntDongle.Read(False)
+                    for d in data:
+                        synch, length, id, info, checksum, _rest, Channel, DataPageNumber = ant.DecomposeMessage(d)
+                        if ((Channel == masterChannelID) and (id == ant.msgID_ChannelID)):
+                            Channel, DeviceNumber, DeviceTypeID, TransmissionType = ant.unmsg51_ChannelID(info)
+                            # -----------------------------------------------------------
+                            # Check if correct  DeviceType is discovered
+                            # -----------------------------------------------------------
+                            if (DeviceTypeID == bridgeDeviceTypeID):
+                                logfile.Write("Bridge %s type: connected as master %6.6d on channel %2.2d" % (bridgeTypeName, DeviceNumber, Channel), True)
+                                pairAsMaster = False
                                 break
-                            elif (iteration % 10 == 0): logfile.Console ("%6s - Device number not assigned yet." % iteration)
 
-                messages = []
-                if (not pairedAsSlave):
+                    messages = []
+                    if pairAsMaster:
+                        msg = ant.msg4D_RequestMessage(masterChannelID, ant.msgID_ChannelID)
+                        messages.append(msg)
+                    else:
+                        # Send serial and version data
+                        messages.append(masterSerialMsg)
+                        messages.append(masterSWmsg)
+
+                    AntDongle.Write(messages, False, False)
+
+                    # -------------------------------------------------------
+                    # WAIT So we do not cycle faster than 2 x per second
+                    # -------------------------------------------------------
+                    SleepTime = 0.5 - (time.time() - StartTime)
+                    if SleepTime > 0:
+                        time.sleep(SleepTime)
+
+                # End of Master connection
+            else:
+                logfile.Console(
+                    'Bridge %s type: NO master device configured on Bridge channel %s' % (bridgeTypeName, masterChannelID))
+
+            if pairAsSlave:
+                logfile.Console(
+                    'Bridge %s type: configuring as slave device %s on Bridge channel %s' % (bridgeTypeName, slaveDeviceNumber, slaveChannelID))
+                messages = [
+                    ant.msg42_AssignChannel(slaveChannelID, ant.ChannelType_BidirectionalReceive, bridgeNetworkNumber),
+                    ant.msg51_ChannelID(slaveChannelID, slaveDeviceNumber, bridgeDeviceTypeID, 0),
+                    ant.msg45_ChannelRfFrequency(slaveChannelID, bridgeRfFrequency),
+                    ant.msg43_ChannelPeriod(slaveChannelID, bridgeChannelPeriod),
+                    ant.msg60_ChannelTransmitPower(slaveChannelID, bridgeTransmitPower),
+                    ant.msg4B_OpenChannel(slaveChannelID)
+                ]
+                AntDongle.Write(messages, True, False)
+
+                logfile.Console ("Bridge %s type: connecting as slave - needs master device to be active ..." % bridgeTypeName)
+
+                iteration = 0
+                while pairAsSlave:
+                    # Pairing with Brake - act as slave
+                    iteration += 1
+
+                    StartTime = time.time()
+                    # -------------------------------------------------------------------
+                    # Receive response from channels
+                    # -------------------------------------------------------------------
+                    data = AntDongle.Read(False)
+
+                    for d in data:
+                        synch, length, id, info, checksum, rest, Channel, DataPageNumber = ant.DecomposeMessage(d)
+                        # ---------------------------------------------------------------
+                        # Check msgID_ChannelID found on  correct channel
+                        # ---------------------------------------------------------------
+                        if (Channel == slaveChannelID) and (id == ant.msgID_ChannelID):
+                            # -----------------------------------------------------------
+                            # Check if correct DeviceType is discovered with DeviceNumber assigned
+                            # -----------------------------------------------------------
+                            Channel, DeviceNumber, DeviceTypeID, TransmissionType = ant.unmsg51_ChannelID(info)
+                            if DeviceTypeID == bridgeDeviceTypeID:
+                                if DeviceNumber:
+                                    slaveDeviceNumber = DeviceNumber
+                                    logfile.Write("Bridge %s type: found master device with number %6.6d on slave channel %2.2d" % (bridgeTypeName, slaveDeviceNumber, slaveChannelID), True)
+                                    pairAsSlave = False
+                                    break
+                                elif (iteration % 10 == 0): logfile.Console ("%6s - Device number not assigned yet." % iteration)
+
+                    messages = []
+                    if pairAsSlave:
+                        msg = ant.msg4D_RequestMessage(slaveChannelID, ant.msgID_ChannelID)
+                        messages.append(msg)
+                        if (HUDeviceNumber):  # Keep HU alive
+                            info = ant.msgPage000_TacxVortexHU_StayAlive(huChannelID)
+                            msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
+                            messages.append(msg)
+                    else:
+                        # Send serial and version data
+                        messages.append(slaveSerialMsg)
+                        messages.append(slaveSWmsg)
+
+                    # Write collected messages
+                    AntDongle.Write(messages, False, False)
+
+                    # -------------------------------------------------------
+                    # WAIT So we do not cycle faster than 2 x per second
+                    # -------------------------------------------------------
+                    SleepTime = 0.5 - (time.time() - StartTime)
+                    if SleepTime > 0:
+                        time.sleep(SleepTime)
+
+                # Successful slave connection
+            else:
+                logfile.Console(
+                    'Bridge %s type: NO slave device configured on Bridge channel %s' % (bridgeTypeName, slaveChannelID))
+
+            if ConnectHUtoBrakeMode:
+                # Connect HU with Bridge acting as master Brake
+                logfile.Write("Starting Bushido bridge in HU to brake connection mode ..................", True)
+                messages = [
+                    ant.msg42_AssignChannel(masterChannelID, ant.ChannelType_BidirectionalTransmit,
+                                            bridgeNetworkNumber),
+                    ant.msg51_ChannelID(masterChannelID, masterDeviceNumber, bridgeDeviceTypeID,
+                                        ant.TransmissionType_IC),
+                    ant.msg45_ChannelRfFrequency(masterChannelID, bridgeRfFrequency),
+                    ant.msg43_ChannelPeriod(masterChannelID, bridgeChannelPeriod),
+                    ant.msg60_ChannelTransmitPower(masterChannelID, bridgeTransmitPower),
+                    ant.msg4B_OpenChannel(masterChannelID),
+                    ant.msg4D_RequestMessage(masterChannelID, ant.msgID_ChannelID)
+                ]
+                AntDongle.Write(messages)
+
+                iteration = 0
+                while True:
+                    iteration += 1
+
+                    messages = [masterSerialMsg]
+                    messages.append(masterSWmsg)
                     msg = ant.msg4D_RequestMessage(slaveChannelID, ant.msgID_ChannelID)
                     messages.append(msg)
-                    if (HUDeviceNumber):  # Keep HU alive
-                        info = ant.msgPage000_TacxVortexHU_StayAlive(ant.channel_VHU_s)
-                        msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
-                        messages.append(msg)
-                else:
-                    # Send serial and version data
-                    messages.append(slaveSerialMsg)
-                    messages.append(slaveSWmsg)
-
-                # Write collected messages
-                AntDongle.Write(messages, False, False)
-
-                # -------------------------------------------------------
-                # WAIT So we do not cycle faster than 2 x per second
-                # -------------------------------------------------------
-                SleepTime = 0.5 - (time.time() - StartTime)
-                if SleepTime > 0:
-                    time.sleep(SleepTime)
-
-            # Successful slave connection
-
-            if debug.on(debug.Function):
-                logfile.Write("Starting Bushido bridge .................." + welcome, True)
-
-            # Reset odometer?
-            # info = ant.msgPage172_TacxVortexHU_ChangeHeadunitMode(ant.channel_VHU_s, ant.VHU_ResetDistance)
-            # msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
-            # if clv.csvExport: WriteCsv(info, True)
-            # data = AntDongle.Write([msg], True, False)
-
-            # Endless loop repacking messages
-            startTime = time.time()
-
-            setMode = -1
-            prevMode = -1
-
-            if (True): # For exercising input to HU
-                speed    = 50
-                maxSpeed = 600
-                minSpeed = speed
-                speedInc = 1
-                speedFactor = 0
-
-                cadence    = 50
-                cadenceInc = 0.1
-                maxCadence = 100
-                minCadence = cadence
-
-                power      = 100
-                maxPower   = 400
-                powerInc   = 1
-                minPower   = power
-
-                balance    = 0
-                maxBalance = 100
-                balanceInc = 1
-                minBalance = balance
-
-                Alarm = 1
-                period = 10
-                info = genDataPageInfo(masterChannelID, 16, 0, 0, 0, 0, 0, 0, 0)
-                AlarmMsg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
-
-                while True:
-                    if (HUDeviceNumber):
-                        if setMode != ant.VHU_Training:
-                            logfile.Write("Configuring head unit ...", True)
-                            if setMode == ant.VHU_PCmode:
-                                requestMode = ant.VHU_TrainingPause
-                            elif setMode == ant.VHU_TrainingPause:
-                                requestMode = ant.VHU_Training
-                            else:
-                                requestMode = ant.VHU_PCmode
-
-                        while (setMode != ant.VHU_Training):
-                            info = ant.msgPage172_TacxVortexHU_ChangeHeadunitMode(ant.channel_VHU_s, requestMode)
-                            msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
-                            if clv.csvExport: WriteCsv(info, True)
-                            data = AntDongle.Write([msg], True, False)
-
-                            for d in data:
-                                synch, length, id, info, checksum, rest, Channel, DataPageNumber = ant.DecomposeMessage(d)
-                                SubPageNumber = info[2] if len(info) > 2 else None
-                                # ---------------------------------------------------------------
-                                # Check on response message
-                                # ---------------------------------------------------------------
-                                if Channel == ant.channel_VHU_s and id == ant.msgID_BroadcastData and DataPageNumber == 173 and SubPageNumber == 0x01:
-                                    setMode, Year, DeviceNumber = ant.msgUnpage173_01_TacxBushidoSerialMode(info)
-                                    if setMode == ant.VHU_PCmode:
-                                        # PC connection active, go to training mode
-                                        if prevMode != setMode:
-                                            logfile.Write("... Connected", True)
-                                            prevMode = setMode
-                                        requestMode = ant.VHU_TrainingPause
-                                    elif setMode == ant.VHU_TrainingPause:
-                                        # entered training mode, start training
-                                        if prevMode != setMode:
-                                            logfile.Write("...... Paused", True)
-                                            prevMode = setMode
-                                        requestMode = ant.VHU_Training
-                                    elif setMode == ant.VHU_Training:
-                                        logfile.Write("......... Started", True)
-                                        prevMode = setMode
-
-                                        time.sleep(0.1)
-
-                    now = time.time()
-                    if (now - startTime) > period:
-                        startTime = now
-                        speedFactor = (1 + 2*random.random())/2
-                        speed += speedInc
-                        balance += balanceInc
-                        cadence += cadenceInc
-                        power += powerInc
-                        if speed >= maxSpeed or speed <= minSpeed:
-                            speedInc *= -1
-                        if balance >= maxBalance or balance <= minBalance:
-                            balanceInc *= -1
-                        if cadence >= maxCadence or cadence <= minCadence:
-                            cadenceInc *= -1
-                        if power >= maxPower or power <= minPower:
-                            powerInc *= -1
-
-                        logfile.Write("................ Sending  0x%2.2x  .................."  % Alarm, True)
-                        print ("Speed: %3.3d; Cadence: %3.3d; Balance: %3.3d; Power: %3.3d; Speedfactor %2.4f" % (speed, cadence, balance, power, speedFactor))
-
-                        info = genDataPageInfo(masterChannelID, 16, Alarm, 0, 0, 0,  0, 0, 0)
-                        AlarmMsg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
-                        #if Alarm < 8:
-                        #    Alarm += 1
-                        #elif Alarm < 128:
-                        if Alarm < 128:
-                            Alarm = Alarm << 1
-                        else:
-                            Alarm = 1
-
-                    AntDongle.Write([AlarmMsg])
-                    info = ant.msgPage02_TacxBushidoData(masterChannelID, speed, int(cadence), balance)
-                    msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
-                    AntDongle.Write([msg])
-
-                    info = ant.msgPage01_TacxBushidoData(masterChannelID, power)
-                    msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
-                    AntDongle.Write([msg])
-
-                    info = genDataPageInfo(masterChannelID, 4, 0, int(speed*speedFactor/10), 0, 0, 0, 0, 0)
-                    msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
-                    data = AntDongle.Write([msg], True, False)
+                    data = AntDongle.Write(messages, True, False)
                     for d in data:
                         synch, length, id, info, checksum, rest, Channel, DataPageNumber = ant.DecomposeMessage(d)
                         SubPageNumber = info[2] if len(info) > 2 else None
-                        # ---------------------------------------------------------------
-                        # Check on response message
-                        # ---------------------------------------------------------------
-                        if Channel == ant.channel_VHU_s and id == ant.msgID_BroadcastData and DataPageNumber == 173 and SubPageNumber == 0x01:
-                            setMode, Year, DeviceNumber = ant.msgUnpage173_01_TacxBushidoSerialMode(info)
+                        if Channel == masterChannelID and DataPageNumber == 172:
+                            print("Head unit connected to master brake output. Exiting ...")
+                            exit (0)
+                    if (iteration % 10 == 0): logfile.Console("%6s - HU not connected yet." % iteration)
+                    time.sleep(0.25)
 
-            while True:
-                # To pair HU with Bridge as master enable the following
-                if PairHUwithBridge:
-                    AntDongle.Write([masterSerialMsg])
-                    AntDongle.Write([masterSWmsg])
+            else: # For exercising input to HU
+                startTime = time.time()
+
+                # For calibration mode
+                prevCalMode      = -1
+                calibrationMode  = -1 #ant.BBR_Cal_State_NO_CAL
+                calibrationValue = 0
+                lastCalSpeed     = 0
+
+                # For HU mode
+                setMode     = -1
+                prevMode    = -1
+                requestMode = -1
+
+                logfile.Write("Starting Bushido bridge ..................", True)
+                if clv.bridgeHU:
+                    logfile.Write(".................. Bridging Head Unit channel ..................", True)
+                elif not HUDeviceNumber or (not simulatePowerTraining and not simulateSlopeTraining):
+                    logfile.Write(".................. Bridging Bushido Brake channel - N O  T r a i n i n g ..................", True)
                 else:
-                    # Ensure head unit is on the right state
-                    if (HUDeviceNumber):
-                        if setMode != ant.VHU_Training:
-                            logfile.Write("Configuring head unit ...", True)
-                            if setMode   == ant.VHU_PCmode:         requestMode = ant.VHU_TrainingPause
-                            elif setMode == ant.VHU_TrainingPause:  requestMode = ant.VHU_Training
-                            else:                                   requestMode = ant.VHU_PCmode
+                    logfile.Write(".................. Bridging BushidoBrake Unit channel   -   T r a i n i n g  M o d e ..................", True)
 
-                        while (setMode != ant.VHU_Training):
-                            info = ant.msgPage172_TacxVortexHU_ChangeHeadunitMode(ant.channel_VHU_s, requestMode)
+                # Endless loop repacking messages
+                initializeTarget = True
+                while True:
+                    messages = []
+                    increaseTarget = False
+                    decreaseTarget = False
+                    if calibrateBrake:
+                        code = 0x00
+                        if calibrationMode == ant.BBR_Cal_State_NO_CAL:
+                            code = 0x63 # Start calibration
+                            if prevCalMode != calibrationMode:
+                                logfile.Write("CALIBRATION  - START CYCLING ....", True)
+                                prevCalMode = calibrationMode
+                        elif calibrationMode == ant.BBR_Cal_State_CAL_MODE:
+                            if prevCalMode != calibrationMode:
+                                logfile.Write("CALIBRATION  - speed up to 40km/h", True)
+                                prevCalMode = calibrationMode
+                        elif calibrationMode == ant.BBR_Cal_State_CAL_REQ:
+                            if prevCalMode != calibrationMode:
+                                logfile.Write("CALIBRATION request acknowledged", True)
+                                prevCalMode = calibrationMode
+                        elif calibrationMode == ant.BBR_Cal_State_AT_SPEED:
+                            if prevCalMode != calibrationMode:
+                                logfile.Write("CALIBRATION  - STOP CYCLING !!!!", True)
+                                prevCalMode = calibrationMode
+                        elif calibrationMode == ant.BBR_Cal_State_SLOW_DOWN:
+                            if prevCalMode != calibrationMode:
+                                logfile.Write("CALIBRATION  - RUNOFF mode: do not pedal or brake", True)
+                                prevCalMode = calibrationMode
+                        elif calibrationMode == ant.BBR_Cal_State_ERROR:
+                            if prevCalMode != calibrationMode:
+                                prevCalMode = calibrationMode
+                                logfile.Write("CALIBRATION - ERROR - Restarting", True)
+                        elif calibrationMode == ant.BBR_Cal_State_NO_ERROR:
+                            code = 0x58 # Request calibration status
+                            if prevCalMode != calibrationMode:
+                                prevCalMode = calibrationMode
+                                logfile.Write("CALIBRATION  - completed successfully", True)
+                        elif calibrationMode == ant.BBR_Cal_State_READY:
+                            code = 0x4d  # Request calibration value
+                            if prevCalMode != calibrationMode:
+                                prevCalMode = calibrationMode
+                                logfile.Write("CALIBRATION  - requesting calibration value ", True)
+                        elif calibrationMode == ant.BBR_Cal_State_VAL_RDY:
+                            if prevCalMode != calibrationMode:
+                                prevCalMode = calibrationMode
+                                logfile.Write("CALIBRATION VALUE = %4.2f" % calibrationValue, True)
+                                if calibrationValue < 15 and calibrationValue > 10:
+                                    calibrateBrake = False
+                                else:
+                                    logfile.Write("CALIBRATION VALUE out of recommended range [10-15]. Next try ...", True)
+
+                        if code:
+                            info = genDataPageInfo(slaveChannelID, 0x23, code, 0, 0, 0, 0, 0, 0)
                             msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
+                            messages.append(msg)
                             if clv.csvExport: WriteCsv(info, True)
-                            data = AntDongle.Write([msg], True, False)
+                        elif calibrateBrake and time.time() - startTime > 0.5:
+                            if lastCalSpeed != BR_Speed:
+                                print("%4.2f km/h" % BR_Speed)
+                                lastCalSpeed = BR_Speed
+                            startTime = time.time()
 
-                            for d in data:
-                                synch, length, id, info, checksum, rest, Channel, DataPageNumber = ant.DecomposeMessage(d)
-                                SubPageNumber = info[2] if len(info) > 2 else None
-                                # ---------------------------------------------------------------
-                                # Check on response message
-                                # ---------------------------------------------------------------
-                                if Channel == ant.channel_VHU_s and id == ant.msgID_BroadcastData and DataPageNumber == 173 and SubPageNumber == 0x01:
-                                    setMode, Year, DeviceNumber = ant.msgUnpage173_01_TacxBushidoSerialMode(info)
-                                    if setMode == ant.VHU_PCmode:
-                                        # PC connection active, go to training mode
-                                        if prevMode != setMode:
-                                            logfile.Write("... Connected", True)
-                                            prevMode = setMode
-                                        requestMode = ant.VHU_TrainingPause
-                                    elif setMode == ant.VHU_TrainingPause:
-                                        # entered training mode, start training
-                                        if prevMode != setMode:
-                                            logfile.Write("...... Paused", True)
-                                            prevMode = setMode
-                                        requestMode = ant.VHU_Training
-                                    elif setMode == ant.VHU_Training:
-                                        logfile.Write("......... Started", True)
-                                        prevMode = setMode
+                    elif HUDeviceNumber:
+                        # HU used to send targets to brake - get/keep it in the right state
+                        if setMode != ant.VHU_Training:
+                            if requestMode == -1:
+                                logfile.Write("Configuring head unit ...", True)
+                                requestMode = ant.VHU_PCmode
+                            if setMode == ant.VHU_PCmode:
+                                if prevMode != setMode:
+                                    logfile.Write("... Connected", True)
+                                    prevMode = setMode
+                                requestMode = ant.VHU_TrainingPause
+                            elif setMode == ant.VHU_TrainingPause:
+                                if prevMode != setMode:
+                                    logfile.Write("...... Paused", True)
+                                    prevMode = setMode
+                                requestMode = ant.VHU_Training
 
-                                        time.sleep(0.1)
+                            info = ant.msgPage172_TacxVortexHU_ChangeHeadunitMode(huChannelID, requestMode)
+                            msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
+                            messages.append(msg)
+                            if clv.csvExport: WriteCsv(info, True)
 
+                        elif prevMode != setMode:
+                            # This is the first time in training state
+                            logfile.Write("......... Started", True)
+                            prevMode = setMode
+
+                    data = AntDongle.Read(False)
                     logDataChanged = False
                     counter = 0
-                    data = AntDongle.Read(False)
                     logfile.Write("................ Read %3.3d messages from Dongle.................." % len(data))
                     for d in data:
                         synch, length, id, info, checksum, rest, Channel, DataPageNumber = ant.DecomposeMessage(d)
@@ -729,7 +713,7 @@ while (AntDongle.OK):
                             # ---------------------------------------------------------------
                             if DataPageNumber == 0:
                                 ant.msgUnpage00_TacxBushidoData(info)
-                                if clv.csvExport: WriteCsv(info, True)
+                                if clv.csvExport: WriteCsv(info)
 
                             # ---------------------------------------------------------------
                             # Data page 01 - Power from brake
@@ -760,8 +744,8 @@ while (AntDongle.OK):
                             # ---------------------------------------------------------------
                             elif DataPageNumber == 2:
                                 Speed, Cadence, Balance = ant.msgUnpage02_TacxBushidoData(info)
-                                if (Speed != BR_Speed):
-                                    BR_Speed = Speed
+                                if (Speed/10 != BR_Speed):
+                                    BR_Speed = Speed/10
                                     logDataChanged = True
                                 if (Cadence != BR_Cadence):
                                     BR_Cadence = Cadence
@@ -812,10 +796,10 @@ while (AntDongle.OK):
                             # Data page x22 - from brake when calibrating
                             # ---------------------------------------------------------------
                             elif DataPageNumber == 34:
-                                powerback = ant.msgUnpage22_TacxBushidoData(info)
-                                if clv.csvExport: WriteCsv(info, True)
-                                if (Powerback != BR_Pback):
-                                    BR_Pback = Powerback
+                                powerback, calibrationMode, calibrationValue = ant.msgUnpage22_TacxBushidoData(info)
+                                if clv.csvExport: WriteCsv(info)
+                                if (powerback != BR_Pback):
+                                    BR_Pback = powerback
                                     logDataChanged = True
 
                             # ---------------------------------------------------------------
@@ -823,45 +807,52 @@ while (AntDongle.OK):
                             # ---------------------------------------------------------------
                             elif DataPageNumber == 35:
                                 ant.msgUnpage23_TacxBushidoData(info)
-                                if clv.csvExport: WriteCsv(info, True)
+                                if clv.csvExport: WriteCsv(info)
 
                             # ---------------------------------------------------------------
                             # Data page xac heartbeat pages, don't bother
                             # ---------------------------------------------------------------
                             elif (DataPageNumber == 172):
-                                if clv.csvExport: WriteCsv(info, True)
+                                if clv.csvExport: WriteCsv(info)
 
                             # ---------------------------------------------------------------
                             # Data page xad msgUnpage173_TacxBushidoData
                             # Serial number and SW version
                             # ---------------------------------------------------------------
                             elif (DataPageNumber == 173):
-                                if Channel == ant.channel_VHU_s and SubPageNumber == 1:
+                                if Channel == huChannelID and SubPageNumber == 1:
                                     setMode, Year, Number = ant.msgUnpage173_01_TacxBushidoSerialMode(info)
                                 elif SubPageNumber == 2:
                                     ant.msgUnpageAD02_TacxBushidoData(info)
-                                if clv.csvExport: WriteCsv(info, True)
+                                if clv.csvExport: WriteCsv(info)
 
                             elif DataPageNumber == 221:
                                 # Data pages from HU
-                                if Channel == ant.channel_VHU_s:
+                                if Channel == huChannelID:
                                     # -------------------------------------------------------------------
                                     # Data page 221 (0x10) msgUnpage221_TacxVortexHU_ButtonPressed
                                     # -------------------------------------------------------------------
                                     if id == ant.msgID_AcknowledgedData and SubPageNumber == 0x10:
                                         Buttons = ant.msgUnpage221_TacxVortexHU_ButtonPressed(info)
-                                        if clv.csvExport: WriteCsv(info, True)
+                                        if clv.csvExport: WriteCsv(info)
                                         if debug.on(debug.Function):
                                             logfile.Write('Bushido Page=%d/%#x (IN)  Keycode=%d' %
-                                                          (DataPageNumber, SubPageNumber, Buttons), True)
+                                                          (DataPageNumber, SubPageNumber, Buttons))
+                                        Keycode = Buttons & 0x0F  # ignore key press duration
+                                        # Only check up/down buttons
+                                        if Keycode == ant.VHU_Button_Up:
+                                            increaseTarget = True
+                                        elif Keycode == ant.VHU_Button_Down:
+                                            decreaseTarget = True
+
                                     elif id == ant.msgID_BroadcastData:
                                         if SubPageNumber == 1:
                                             Power, Speed, Cadence, Balance = ant.msgUnpage221_01_TacxGeniusSpeedPowerCadence(info)
                                             if (Power != HU_Power):
                                                 HU_Power = Power
                                                 logDataChanged = True
-                                            if (Speed != HU_Speed):
-                                                HU_Speed = Speed
+                                            if (Speed/10 != HU_Speed):
+                                                HU_Speed = Speed/10
                                                 logDataChanged = True
                                             if (Cadence != HU_Cadence):
                                                 HU_Cadence = Cadence
@@ -890,7 +881,7 @@ while (AntDongle.OK):
 
                                         elif SubPageNumber == 4:
                                             CalibrationState, CalibrationValue = ant.msgUnpage221_04_TacxGeniusCalibrationInfo(info)
-                                            if clv.csvExport: WriteCsv(info, True)
+                                            if clv.csvExport: WriteCsv(info)
 
                                 else:
                                     # ---------------------------------------------------------------
@@ -898,27 +889,30 @@ while (AntDongle.OK):
                                     # Pages from HU
                                     # ---------------------------------------------------------------
                                     ant.msgUnpageDD_TacxBushidoData(info)
-                                    if clv.csvExport: WriteCsv(info, True)
+                                    if clv.csvExport: WriteCsv(info)
 
                             else:
-                                if (Channel == slaveChannelID):
+                                if Channel == slaveChannelID:
                                     logfile.Write("=================== Slave channel: unhandled Date Page %3.3d" % DataPageNumber, True)
+                                elif Channel == huChannelID:
+                                    logfile.Write("=================== HU channel: unhandled Date Page %3.3d" % DataPageNumber, True)
                                 else:
                                     logfile.Write("=================== Master channel: unhandled Date Page %3.3d" % DataPageNumber, True)
 
-                        # Actual message conversion here - after decodoing incoming
+                        # Actual message forwarding
                         ab = bytearray(info)
                         if (id == ant.msgID_ChannelResponse and (int(ab[1]) == 1)):
                             # Do not re-transit RF response messages
                             pass
                         elif (id == ant.msgID_BroadcastData and DataPageNumber == 173):
-                            # Do not forward serial and SW but use our own instead so know what to pair (avoid bridge bypass)
+                            # Do not forward serial and SW but use our own instead so can check other devices are talking
+                            # to the bridge (avoid bridge bypass)
                             if (Channel == slaveChannelID):
-                                if      int(info[2]) == 1:    AntDongle.Write([masterSerialMsg])    # sub page 1
-                                elif    int(info[2]) == 2:    AntDongle.Write([masterSWmsg])        # sub page 2
+                                if      int(info[2]) == 1:    messages.append(masterSerialMsg)    # sub page 1
+                                elif    int(info[2]) == 2:    messages.append(masterSWmsg)        # sub page 2
                             elif (Channel == masterChannelID):
-                                if      int(info[2]) == 1:    AntDongle.Write([slaveSerialMsg])     # sub page 1
-                                elif    int(info[2]) == 2:    AntDongle.Write([slaveSWmsg])         # sub page 2
+                                if      int(info[2]) == 1:    messages.append(slaveSerialMsg)     # sub page 1
+                                elif    int(info[2]) == 2:    messages.append(slaveSWmsg)         # sub page 2
                         elif Channel == slaveChannelID or Channel == masterChannelID:
                             if Channel == slaveChannelID:
                                 ab[0] = masterChannelID
@@ -926,42 +920,44 @@ while (AntDongle.OK):
                                 ab[0] = slaveChannelID
                             info = bytes(ab)
                             msg = ant.ComposeMessage(id, info)
-                            AntDongle.Write([msg], False)
+                            messages.append(msg)
                             counter += 1
-                        elif Channel == ant.channel_VHU_s: pass # not to be forwarded
+                        elif Channel == huChannelID: pass # not to be forwarded
                         else:
                             logfile.Console("Message ID %2.2x found on channel %2.2d - not forwarded" % (id, Channel))
 
                     logfile.Write("................ Bridged %3.3d messages .................." % counter)
 
-                    now = time.time()
-                    if (now - startTime) > period:
-                        startTime = now
-                        if (simulatePower or simulateSlope):
-                            if simulatePower:
+                    # Only valid when
+                    if setMode == ant.VHU_Training:
+                        if   increaseTarget: Target += targetIncrement
+                        elif decreaseTarget: Target -= targetIncrement
+
+                        if simulatePowerTraining:
+                            if increaseTarget or decreaseTarget or initializeTarget:
                                 logfile.Write("................ Setting power target to %3.3d  .................." % Target, True)
-                                info = ant.msgPageDC_TacxBushidoDataPower(ant.channel_VHU_s, Target, Weight)
-                            elif simulateSlope:
+                                logDataChanged = True
+                            info = ant.msgPageDC_TacxBushidoDataPower(huChannelID, Target, Weight)
+                        elif simulateSlopeTraining:
+                            if increaseTarget or decreaseTarget or initializeTarget:
                                 logfile.Write("................ Setting grade target to %4.2f percent  .................." % Target, True)
-                                info = ant.msgPageDC_TacxBushidoDataSlope(ant.channel_VHU_s, Target, Weight)
+                                logDataChanged = True
+                            info = ant.msgPageDC_TacxBushidoDataSlope(huChannelID, Target, Weight)
 
-                            HU_Target = Target
-                            logDataChanged = True
+                        HU_Target = Target
+                        msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
+                        messages.append(msg)
+                        if clv.csvExport: WriteCsv(info, True)
 
-                            msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
-                            AntDongle.Write([msg], False, False)
+                        if initializeTarget: initializeTarget = False
 
-                            Target += increment
-                            if (Target >= maxTarget or Target <= minTarget):
-                                increment *= -1
-
-                        else:
-                            logfile.Write("................ Not simulating a training  ..................", True)
-
-                    if (logDataChanged):
-                        WriteLog(not simulateSlope)
-
-
+                    AntDongle.Write(messages, False, False)
+                    # delta = time.time() - startTime
+                    # if delta < 0.1:
+                    #     time.sleep(0.1 - delta)
+                    # StartTime = now
+                    if (logDataChanged and clv.csvExport):
+                        WriteLog(not simulateSlopeTraining)
 
     except KeyboardInterrupt:
         logfile.Console ("Listening stopped")
