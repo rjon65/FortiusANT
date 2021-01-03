@@ -2940,7 +2940,9 @@ def msgUnpage10_TacxBushidoData (info):
 #        XX = 0x02 Calibration Mode
 #        XX = 0x04 Up to speed
 #        XX = 0x05 Slowing down
-#        XX = 01, 0b, and 0c seen as well => when calibration failed?
+#        XX = 0x0a error?
+#        XX = 0x0b run down completed?
+#        XX = 01,and 0c seen as well => other failure modes?
 #        XX = 00 calibration requested
 #   SP = 03 with
 #        XX = 0x0c No error
@@ -2957,6 +2959,7 @@ BBR_Cal_State_NO_ERROR  = 5
 BBR_Cal_State_READY     = 6
 BBR_Cal_State_VAL_RDY   = 7
 BBR_Cal_State_ERROR     = 8
+BBR_Cal_State_SLOWED    = 9
 
 def msgUnpage22_TacxBushidoData (info):
     fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
@@ -2991,31 +2994,35 @@ def msgUnpage22_TacxBushidoData (info):
     calMode  = BBR_Cal_State_NO_CAL
     calValue = 0
     unknown  = False
+
     if Index == 6:
-        if Rev1 == 2:
-            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). In calibration mode" % (Page, Index))
+        if Rev1 == 1 or Rev1 == 2 or Rev1 == 3: # 1 seen with HU when restarting after calibration error
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d, code  %2.2x). In calibration mode" % (Page, Index, Rev1))
             calMode = BBR_Cal_State_CAL_MODE
         elif Rev1 == 4:
             logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: up to speed" % (Page, Index))
             calMode = BBR_Cal_State_AT_SPEED
         elif Rev1 == 5:
-            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: slowing down" % (Page, Index))
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d, code  %2.2x). Calibration mode: runoff started" % (Page, Index, Rev1))
             calMode = BBR_Cal_State_SLOW_DOWN
-        elif Rev1 == 0x0a:
-            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: slowing down" % (Page, Index))
-            calMode = BBR_Cal_State_ERROR
+        elif Rev1 == 0x0b or Rev1 == 0x0a: # Seen 0x0a when using head unit, 0x0b when using TTS4
+            logfile.Write("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: runoff complete" % (Page, Index))
+            calMode = BBR_Cal_State_SLOWED
         elif Rev1 == 0:
             logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode requested" % (Page, Index))
             calMode = BBR_Cal_State_CAL_REQ
         else: unknown = True
     elif Index == 3:
-        if Rev1 == int(0x0c):
-            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: no error" % (Page, Index))
+        if Rev1 == 0x0b or Rev1 == 0x0c:
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d, code  %2.2x). Calibration mode: no error" % (Page, Index, Rev1))
             calMode = BBR_Cal_State_NO_ERROR
-        elif Rev1 == int(0x4d):
+        elif Rev1 == 0x0d:
+            logfile.Write("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: ERROR" % (Page, Index))
+            calMode = BBR_Cal_State_ERROR
+        elif Rev1 == 0x4d:
             logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: calibrated" % (Page, Index))
             calMode = BBR_Cal_State_READY
-        elif Rev1 == int(0x42):
+        elif Rev1 == 0x42:
             calValue = Rev3/10
             logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration value = %3.2f" % (Page, Index, Rev3/10))
             calMode = BBR_Cal_State_VAL_RDY
@@ -3083,9 +3090,10 @@ def msgUnpage23_TacxBushidoData (info):
     SBZ3 = tuple[nField3]
 
     logfile.Write("Received Bushido page %2.2d  - sub page %2.2x" % (Page, Index))
+    unknownIndex = Index != 0x63 and Index != 0x58 and Index != 0x4d and Index != 0x00
 
-    if (Index or SBZ2 or SBZ3 or SBZ1):
-        logfile.Write("Received Bushido page %2.2d - sub page %2.2x found non zero fields %4.4x - %4.4x - %4.4x." % (Page,Index, SBZ1, SBZ2, SBZ3))
+    if (unknownIndex or SBZ2 or SBZ3 or SBZ1):
+        logfile.Write("Received Bushido page %2.2d - sub page %2.2x found non zero fields %4.4x - %4.4x - %4.4x." % (Page,Index, SBZ1, SBZ2, SBZ3), True)
 
     return
 

@@ -263,14 +263,12 @@ logfile.Console (AntDongle.Message)
 # Configure what we want to get done
 # Maybe these need to end up as command line arguments in the end
 # ------------------------------------------------------------------------------
-# Pair the HU with the Bridge as master - exits when done
+
+# Only needed to pair the HU with the Bridge as master - exits bridge when done
 ConnectHUtoBrakeMode = False
 
-# HU to be paired - drive Brake through HU?
+# HU to be paired - i.e. when driving Brake through HU
 pairHU = False
-
-# Calibration needed
-calibrateBrake = True
 
 # Slave device on bridge to be paired?
 pairAsSlave = True
@@ -284,6 +282,28 @@ if ConnectHUtoBrakeMode:
     pairAsSlave     = False
     pairAsMaster    = False
 
+# ------------------------------------------------------------------------------
+# Simulating a trainer: target controlled through up/down buttons HU
+# ------------------------------------------------------------------------------
+
+# Calibration needed - before training starts
+calibrateBrake = True
+
+# Power target
+simulatePowerTraining = True
+targetIncrement       = 10
+Weight                = 10  # flywheel??
+Target                = 150 # target power at start
+
+# Slope target
+simulateSlopeTraining = False
+if simulateSlopeTraining:
+    targetIncrement = 0.5
+    Weight          = 78 # in this case athlete + bicycle weight
+    Target          = 0  # target grade at start
+    simulatePowerTraining = False
+
+# ------------------------------------------------------------------------------
 # Configurations kept under local control
 # The bridge master channel - connects to slave
 masterDeviceNumber = clv.deviceNr
@@ -323,22 +343,6 @@ slaveSWmsg = ant.ComposeMessage(ant.msgID_BroadcastData, ant.msgPageAD02_TacxBus
 masterSerialMsg = ant.ComposeMessage(ant.msgID_BroadcastData,
                                      ant.msgPageAD01_TacxBushidoData(masterChannelID, 2020, 2020))
 masterSWmsg = ant.ComposeMessage(ant.msgID_BroadcastData, ant.msgPageAD02_TacxBushidoData(masterChannelID, 5, 6, 7890))
-
-# ------------------------------------------------------------------------------
-# Simulating a trainer: oscillate between min and max Target by +/- increment
-# Power target
-simulatePowerTraining = True
-targetIncrement       = 10
-Weight                = 10  # flywheel??
-Target                = 150 # target power at start
-
-# Slope target
-simulateSlopeTraining = False
-if simulateSlopeTraining:
-    targetIncrement = 0.5
-    Weight          = 82 # in this case athlete + bicycle weight
-    Target          = 0  # target grade at start
-    simulatePowerTraining = False
 
 # ------------------------------------------------------------------------------
 # This is the main loop
@@ -608,18 +612,24 @@ while (AntDongle.OK):
 
                 # Endless loop repacking messages
                 initializeTarget = True
+                StartTime        = time.time()
+                lastSpeedChange  = StartTime
                 while True:
                     messages = []
                     increaseTarget = False
                     decreaseTarget = False
                     if calibrateBrake:
-                        code = 0x00
+                        code = -1
+                        if time.time() - lastSpeedChange > 5:
+                            logfile.Write("CALIBRATION  - START CYCLING ....", True)
+                            lastSpeedChange = time.time()
+
                         if calibrationMode == ant.BBR_Cal_State_NO_CAL:
                             code = 0x63 # Start calibration
                             if prevCalMode != calibrationMode:
-                                logfile.Write("CALIBRATION  - START CYCLING ....", True)
                                 prevCalMode = calibrationMode
                         elif calibrationMode == ant.BBR_Cal_State_CAL_MODE:
+                            code = 0x00
                             if prevCalMode != calibrationMode:
                                 logfile.Write("CALIBRATION  - speed up to 40km/h", True)
                                 prevCalMode = calibrationMode
@@ -635,10 +645,10 @@ while (AntDongle.OK):
                             if prevCalMode != calibrationMode:
                                 logfile.Write("CALIBRATION  - RUNOFF mode: do not pedal or brake", True)
                                 prevCalMode = calibrationMode
-                        elif calibrationMode == ant.BBR_Cal_State_ERROR:
+                        elif calibrationMode == ant.BBR_Cal_State_SLOWED:
                             if prevCalMode != calibrationMode:
                                 prevCalMode = calibrationMode
-                                logfile.Write("CALIBRATION - ERROR - Restarting", True)
+                                logfile.Write("CALIBRATION - RUNOFF COMPLETE - start cycling again", True)
                         elif calibrationMode == ant.BBR_Cal_State_NO_ERROR:
                             code = 0x58 # Request calibration status
                             if prevCalMode != calibrationMode:
@@ -649,25 +659,35 @@ while (AntDongle.OK):
                             if prevCalMode != calibrationMode:
                                 prevCalMode = calibrationMode
                                 logfile.Write("CALIBRATION  - requesting calibration value ", True)
+                        elif calibrationMode == ant.BBR_Cal_State_ERROR:
+                            if prevCalMode != calibrationMode:
+                                prevCalMode = calibrationMode
+                                logfile.Write("CALIBRATION ERROR. STOP CYLING for next try ...", True)
                         elif calibrationMode == ant.BBR_Cal_State_VAL_RDY:
                             if prevCalMode != calibrationMode:
                                 prevCalMode = calibrationMode
-                                logfile.Write("CALIBRATION VALUE = %4.2f" % calibrationValue, True)
-                                if calibrationValue < 15 and calibrationValue > 10:
-                                    calibrateBrake = False
+                                logfile.Write("CALIBRATION VALUE = %4.2f. Recommended range [13-19]" % calibrationValue, True)
+                                if calibrationValue < 19 and calibrationValue > 13:
+                                    pass #calibrateBrake = False
                                 else:
-                                    logfile.Write("CALIBRATION VALUE out of recommended range [10-15]. Next try ...", True)
+                                    logfile.Write("CALIBRATION VALUE out of recommended range [13-19]. STOP CYCLING for next try ...", True)
+                                    if calibrationValue < 13:
+                                        logfile.Write("Insufficient roll pressure. Turn knob anti-clockwise.", True)
+                                    else:
+                                        logfile.Write("Too much roll pressure. Turn knob clockwise.", True)
 
-                        if code:
+                        if code != -1:
                             info = genDataPageInfo(slaveChannelID, 0x23, code, 0, 0, 0, 0, 0, 0)
                             msg = ant.ComposeMessage(ant.msgID_BroadcastData, info)
                             messages.append(msg)
                             if clv.csvExport: WriteCsv(info, True)
-                        elif calibrateBrake and time.time() - startTime > 0.5:
-                            if lastCalSpeed != BR_Speed:
-                                print("%4.2f km/h" % BR_Speed)
-                                lastCalSpeed = BR_Speed
+
+                        if calibrateBrake and code <= 0 and time.time() - startTime > 0.5:
                             startTime = time.time()
+                            if lastCalSpeed != BR_Speed:
+                                logfile.Write("%4.2f km/h" % BR_Speed, True)
+                                lastCalSpeed = BR_Speed
+                                lastSpeedChange = startTime
 
                     elif HUDeviceNumber:
                         # HU used to send targets to brake - get/keep it in the right state
