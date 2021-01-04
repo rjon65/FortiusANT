@@ -268,7 +268,7 @@ logfile.Console (AntDongle.Message)
 ConnectHUtoBrakeMode = False
 
 # HU to be paired - i.e. when driving Brake through HU
-pairHU = False
+pairHU = True
 
 # Slave device on bridge to be paired?
 pairAsSlave = True
@@ -296,9 +296,9 @@ Weight                = 10  # flywheel??
 Target                = 150 # target power at start
 
 # Slope target
-simulateSlopeTraining = False
+simulateSlopeTraining = True
 if simulateSlopeTraining:
-    targetIncrement = 0.5
+    targetIncrement = 1 #0.5
     Weight          = 78 # in this case athlete + bicycle weight
     Target          = 0  # target grade at start
     simulatePowerTraining = False
@@ -668,13 +668,13 @@ while (AntDongle.OK):
                                 prevCalMode = calibrationMode
                                 logfile.Write("CALIBRATION VALUE = %4.2f. Recommended range [13-19]" % calibrationValue, True)
                                 if calibrationValue < 19 and calibrationValue > 13:
-                                    pass #calibrateBrake = False
+                                    calibrateBrake = False
                                 else:
-                                    logfile.Write("CALIBRATION VALUE out of recommended range [13-19]. STOP CYCLING for next try ...", True)
+                                    logfile.Write("CALIBRATION VALUE out of recommended range [13-19]", True)
                                     if calibrationValue < 13:
-                                        logfile.Write("Insufficient roll pressure. Turn knob anti-clockwise.", True)
+                                        logfile.Write("Insufficient roll pressure. Turn knob anti-clockwise. STOP CYCLING for next try ...", True)
                                     else:
-                                        logfile.Write("Too much roll pressure. Turn knob clockwise.", True)
+                                        logfile.Write("Too much roll pressure. Turn knob clockwise. STOP CYCLING for next try ...", True)
 
                         if code != -1:
                             info = genDataPageInfo(slaveChannelID, 0x23, code, 0, 0, 0, 0, 0, 0)
@@ -754,7 +754,7 @@ while (AntDongle.OK):
                             # Data page 01 target power from BHU
                             # ---------------------------------------------------------------
                             elif (DataPageNumber == 1 and Channel == masterChannelID):
-                                Resistance = ant.msgUnpage01_TacxBushidoHeadDataPower(info)
+                                Resistance = ant.msgUnpage01_TacxBushidoHeadDataResistance(info)
                                 if (Resistance != HU_Res):
                                     HU_Res = Resistance
                                     logDataChanged = True

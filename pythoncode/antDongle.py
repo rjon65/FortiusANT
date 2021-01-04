@@ -2602,7 +2602,6 @@ def msgUnpage01_TacxBushidoData (info):
     return Power, LRForce1, LRForce2
 
 # ------------------------------------------------------------------------------
-
 def msgPage01_TacxBushidoData (Channel, Power):
     DataPageNumber      = 1
 
@@ -2626,76 +2625,9 @@ def msgPage01_TacxBushidoData (Channel, Power):
     return info
 
 # ------------------------------------------------------------------------------
-# P a g e 01 Bushido  T a r g e t P o w e r
-# 0x01 PP PP 00 00 00 00 00
-#
-# rjon: as observed using ANT+ bridge received from HU/TTS4
-# ------------------------------------------------------------------------------
-
-def msgUnpage01_TacxBushidoHeadDataPower (info):
-    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
-    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
-
-    fPowerS             = sc.unsigned_char  # resistance sign
-    nPowerS             = 2
-    fPowerL             = sc.unsigned_char  # resistance LSBs
-    nPowerL             = 3
-    fSBZ1               = sc.unsigned_short  # 00 00
-    nSBZ1               = 4
-    fSBZ2               = sc.unsigned_short  # 00 00
-    nSBZ2               = 5
-    fSBZ3               = sc.unsigned_char   # 00
-    nSBZ3               = 6
-
-    format= sc.big_endian + fChannel + fDataPageNumber + fPowerS + fPowerL + fSBZ1 + fSBZ2 + fSBZ3
-    tuple = struct.unpack (format, info)
-
-    Sign = tuple[nPowerS]
-    Resistance = tuple[nPowerL]
-    if int(Sign) < 128:
-        Resistance *= Sign
-    else:
-        Resistance *= (Sign - 256)
-    SBZ1 = tuple[nSBZ1]
-    SBZ2 = tuple[nSBZ2]
-    SBZ3 = tuple[nSBZ3]
-
-    if debug.on(debug.Function):
-        logfile.Write("Received Bushido HU page %2.2d. Target Resistance %4.4d." % (tuple[1], Resistance))
-
-    if (SBZ1 or SBZ2 or SBZ3):
-        logfile.Write("Received Bushido HU page %2.2d fields not zero: 0x%4.4x - 0x%4.4x - 0x%2.2x" % (tuple[1], SBZ1, SBZ2, SBZ3))
-
-    return Resistance
-
-# ------------------------------------------------------------------------------
-
-def msgPage01_TacxBushidoHeadDataPower (Channel, targetPower):
-    DataPageNumber      = 1
-
-    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
-    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
-
-    fPower              = sc.unsigned_short  # power PP PP
-    fSBZ1               = sc.unsigned_short  # 00 00
-    fSBZ2               = sc.unsigned_short  # 00 00
-    fSBZ3               = sc.unsigned_char   # 00
-
-    format= sc.big_endian + fChannel + fDataPageNumber + fPower + fSBZ1 + fSBZ2 + fSBZ3
-    info   = struct.pack(format, Channel ,  DataPageNumber, int(targetPower), 0, 0,0)
-
-    if debug.on(debug.Function):
-        logfile.Write("Writing Bushido HU page %2.2d. Target Power %3.3d." % (DataPageNumber, targetPower))
-
-    return info
-
-# ------------------------------------------------------------------------------
-# P a g e 01 Bushido   Resistance
+# P a g e 01 Bushido Head Unit   R e s i s t a n c e
 # 0x01 AA BB 00 00 00 00 00
 #
-# rjon: 2020-12-16 using bridge detected not all zero fields are zero,
-# but rather something like:
-# 0x01 AA BB 00 XX 00 YY 00 - no idea what XX and YY are about
 # AA = Course brake resistance level, range: 0x00 > 0x0c (0-12), 0xFF > OxFE.
 # BB = Fine brake resistance level (0x00 > 0xFF)
 # For example, when the gradient is negative, the course resistance will be set
@@ -2713,36 +2645,42 @@ def msgPage01_TacxBushidoHeadDataPower (Channel, targetPower):
 # Refer:    https://github.com/fluxoid-org/CyclismoProject/wiki/Tacx-Bushido-Brake-protocol
 # ------------------------------------------------------------------------------
 def msgUnpage01_TacxBushidoHeadDataResistance (info):
-    fChannel            = sc.unsigned_char  #0 First byte of the ANT+ message content
-    fDataPageNumber     = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
+    fChannel = sc.unsigned_char  # 0 First byte of the ANT+ message content
+    fDataPageNumber = sc.unsigned_char  # payload[0] First byte of the ANT+ datapage
 
-    fCoarse             = sc.unsigned_char
-    nCoarse             = 2
-    fFine               = sc.unsigned_char
-    nFine               = 3
-    fSBZ1               = sc.unsigned_short  # 00 00
-    nSBZ1               = 4
-    fSBZ2               = sc.unsigned_short  # 00 00
-    nSBZ2               = 5
-    fSBZ3               = sc.unsigned_char  # 00
-    nSBZ3               = 6
+    fResistC = sc.unsigned_char  # resistance coarse
+    nResistC = 2
+    fResistF = sc.unsigned_char  # resistance fine
+    nResistF = 3
+    fSBZ1 = sc.unsigned_short  # 00 00
+    nSBZ1 = 4
+    fSBZ2 = sc.unsigned_short  # 00 00
+    nSBZ2 = 5
+    fSBZ3 = sc.unsigned_char  # 00
+    nSBZ3 = 6
 
-    format= sc.big_endian + fChannel + fDataPageNumber + fCoarse + fFine + fSBZ1 + fSBZ2 + fSBZ3
-    tuple = struct.unpack (format, info)
+    format = sc.big_endian + fChannel + fDataPageNumber + fResistC + fResistF + fSBZ1 + fSBZ2 + fSBZ3
+    tuple = struct.unpack(format, info)
 
-    Coarse = tuple[nCoarse]
-    Fine = tuple[nFine]
+    Coarse = tuple[nResistC]
+    Resistance = tuple[nResistF]
+
+    if Coarse < 128:
+        Resistance = Resistance + Coarse * 256
+    else: # Observed values going as low as 0xfa (-15% slope target) so not in line with the above comment
+        Resistance = (Resistance - 256) - 256 * (255 - Coarse)
+
+    if debug.on(debug.Function):
+        logfile.Write("Received Bushido HU page %2.2d. Target Resistance %5.5d." % (tuple[1], Resistance))
+
     SBZ1 = tuple[nSBZ1]
     SBZ2 = tuple[nSBZ2]
     SBZ3 = tuple[nSBZ3]
-
-    if debug.on(debug.Function):
-        logfile.Write("Received Bushido resistance page %2.2d. Resistance coarse %3.3d and fine %3.3d" % (tuple[1], Coarse, Fine))
-
     if (SBZ1 or SBZ2 or SBZ3):
-        logfile.Write("Received Bushido resistance page %2.2d fields not zero: 0x%4.4X - 0x%4.4X - 0x%2.2X" % (tuple[1], SBZ1, SBZ2, SBZ3))
+        logfile.Write(
+            "Received Bushido HU page %2.2d fields not zero: 0x%4.4x - 0x%4.4x - 0x%2.2x" % (tuple[1], SBZ1, SBZ2, SBZ3), True)
 
-    return
+    return Resistance
 
 # ------------------------------------------------------------------------------
 # P a g e 02 Bushido   C a d e n c e - W h e e l s p e e d - B a l a n c e
@@ -3006,15 +2944,15 @@ def msgUnpage22_TacxBushidoData (info):
             logfile.Write ("Received Bushido page %2.2d (subpage %2.2d, code  %2.2x). Calibration mode: runoff started" % (Page, Index, Rev1))
             calMode = BBR_Cal_State_SLOW_DOWN
         elif Rev1 == 0x0b or Rev1 == 0x0a: # Seen 0x0a when using head unit, 0x0b when using TTS4
-            logfile.Write("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: runoff complete" % (Page, Index))
+            logfile.Write("Received Bushido page %2.2d (subpage %2.2d, code  %2.2x). Calibration mode: runoff complete" % (Page, Index, Rev1))
             calMode = BBR_Cal_State_SLOWED
         elif Rev1 == 0:
             logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode requested" % (Page, Index))
             calMode = BBR_Cal_State_CAL_REQ
         else: unknown = True
     elif Index == 3:
-        if Rev1 == 0x0b or Rev1 == 0x0c:
-            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d, code  %2.2x). Calibration mode: no error" % (Page, Index, Rev1))
+        if Rev1 == 0x0c:
+            logfile.Write ("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: no error" % (Page, Index))
             calMode = BBR_Cal_State_NO_ERROR
         elif Rev1 == 0x0d:
             logfile.Write("Received Bushido page %2.2d (subpage %2.2d). Calibration mode: ERROR" % (Page, Index))
